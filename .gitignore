@@ -1,0 +1,65 @@
+# Dependências
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build / produção
+dist/
+build/
+.next/
+out/
+
+# Ambiente
+.env
+.env.*
+!.env.example
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# IDEs / editores
+.vscode/
+.idea/
+
+# Arquivos temporários
+tmp/
+temp/
+
+# Cache
+.cache/
+.parcel-cache/
+
+# Testes / cobertura
+coverage/
+
+# Arquivos de lock (depende da estratégia)
+# Se for projeto, normalmente você MANTÉM:
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Mas se for lib, pode ignorar:
+# package-lock.json
+
+# Docker
+.dockerignore
+
+# Arquivos locais
+*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# SQLite (caso use)
+*.sqlite
+*.sqlite3
+
+# Uploads locais
+uploads/
