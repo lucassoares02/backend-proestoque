@@ -1,4 +1,5 @@
 const service = require("../services/ordersService");
+const { validatePaymentChoice } = require("../services/checkoutPaymentService");
 
 /**
  * Get all Orders
@@ -48,19 +49,33 @@ const find = async (req, res) => {
 };
 
 /**
- * Create new Orders
+ * Create new Orders (finish / confirm)
  */
 const create = async (req, res) => {
-  const { uuid, payment_method, delivery_date, comment } = req.body;
+  const { uuid, payment_method, delivery_date, comment, boleto_term, supplier_id, company_id, order_total } = req.body;
   if (!uuid || Object.keys(uuid).length === 0) {
     return res.status(400).json({ error: "Invalid request body" });
   }
   try {
-    const newItem = await service.create(uuid, payment_method, delivery_date, comment);
-    return res.status(201).json(newItem);
+    // Backend payment validation (if supplier/company context is provided)
+    if (supplier_id && company_id && typeof payment_method === "string") {
+      const { valid, error } = await validatePaymentChoice(
+        Number(supplier_id),
+        Number(company_id),
+        payment_method,
+        boleto_term,
+        order_total,
+      );
+      if (!valid) {
+        return res.status(422).json({ success: false, data: null, error });
+      }
+    }
+
+    const newItem = await service.create(uuid, payment_method, delivery_date, comment, boleto_term);
+    return res.status(201).json({ success: true, data: newItem, error: null });
   } catch (error) {
     console.error("Error creating Orders:", error);
-    return res.status(500).json({ error: "Failed to create Orders" });
+    return res.status(500).json({ success: false, data: null, error: "Failed to create Orders" });
   }
 };
 

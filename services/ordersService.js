@@ -4,7 +4,10 @@ const pool = require("../db");
  * Get All Orders
  */
 const findAll = async (company_id, status) => {
-  let statusText = status == 0 ? "DRAFT" : "CONFIRMED";
+  const isDraft = status == 0;
+  const statusClause = isDraft
+    ? `AND o.status = 'DRAFT'`
+    : `AND o.status IN ('CONFIRMED', 'PENDING_SUPPLIER', 'APPROVED', 'REJECTED')`;
   const result = await pool.query(
     `
 SELECT
@@ -22,10 +25,18 @@ SELECT
         'id', oi.id,
         'order_id', oi.order_id,
         'product_id', oi.product_id,
+        'package_id', oi.package_id,
 
         'quantity', oi.quantity,
         'unit_price', oi.unit_price,
         'total_price', oi.total_price,
+
+        'buy_together_campaign_id', oi.buy_together_campaign_id,
+        'buy_together_applied', oi.buy_together_applied,
+
+        -- 🔹 variação selecionada
+        'variant_id', oi.variant_id,
+        'variant_name', pv.name,
 
         -- 🔹 dados do produto no mesmo nível
         'name', p.name,
@@ -34,8 +45,8 @@ SELECT
         'package_type', p.package_type,
         'units_per_package', p.units_per_package,
 
-        -- 🔹 imagem do produto (primeira)
-        'image', pi.image_url
+        -- 🔹 imagem: prefere da variação, senão a do produto
+        'image', COALESCE(pv.image_url, pi.image_url)
       )
       ORDER BY oi.id
     ) FILTER (WHERE oi.id IS NOT NULL),
@@ -51,6 +62,8 @@ LEFT JOIN order_items oi
   ON oi.order_id = o.id
 LEFT JOIN products p
   ON p.id = oi.product_id
+LEFT JOIN product_variants pv
+  ON pv.id = oi.variant_id
 
 LEFT JOIN LATERAL (
   SELECT url AS image_url
@@ -61,7 +74,7 @@ LEFT JOIN LATERAL (
 ) pi ON TRUE
 
 WHERE o.company_id = $1
-AND o.status = $2
+${statusClause}
 GROUP BY
   o.id,
   s.razao_social,
@@ -76,7 +89,7 @@ ORDER BY o.id DESC;
 
 
     `,
-    [company_id, statusText]
+    [company_id]
   );
 
   return result.rows;
@@ -113,6 +126,10 @@ const find = async (uuid) => {
             'unit_price', oi.unit_price,
             'total_price', oi.total_price,
 
+            -- 🔹 variação selecionada
+            'variant_id', oi.variant_id,
+            'variant_name', pv.name,
+
             -- 🔹 dados do produto no mesmo nível
             'name', p.name,
             'complement', p.complement,
@@ -120,8 +137,8 @@ const find = async (uuid) => {
             'package_type', p.package_type,
             'units_per_package', p.units_per_package,
 
-            -- 🔹 imagem do produto (primeira)
-            'image', pi.image_url
+            -- 🔹 imagem: prefere da variação, senão a do produto
+            'image', COALESCE(pv.image_url, pi.image_url)
           )
           ORDER BY oi.id
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -140,6 +157,8 @@ const find = async (uuid) => {
       ON oi.order_id = o.id
     LEFT JOIN products p
       ON p.id = oi.product_id
+    LEFT JOIN product_variants pv
+      ON pv.id = oi.variant_id
 
     LEFT JOIN LATERAL (
       SELECT url AS image_url
@@ -166,13 +185,30 @@ const find = async (uuid) => {
   return result.rows[0] || null;
 };
 
-const create = async (uuid, payment_method, delivery_date, comment) => {
-  const result = await pool.query("update orders set status = 'CONFIRMED', payment = $2, date = $3, notes = $4 where public_id = $1 RETURNING *", [
-    uuid,
-    payment_method,
-    delivery_date,
-    comment,
-  ]);
+const _legacyPaymentInt = (method) => {
+  if (method === "PIX") return 1;
+  if (method === "BOLETO") return 2;
+  if (method === "CREDITO_COMERCIAL") return 3;
+  if (method === "TRANSFERENCIA_BANCARIA") return 4;
+  return Number(method) || 0;
+};
+
+const create = async (uuid, payment_method, delivery_date, comment, boleto_term) => {
+  const legacyInt = typeof payment_method === "string" ? _legacyPaymentInt(payment_method) : payment_method;
+  const methodStr = typeof payment_method === "string" ? payment_method : null;
+
+  const result = await pool.query(
+    `UPDATE orders
+     SET status = 'PENDING_SUPPLIER',
+         payment = $2,
+         payment_method = $3,
+         boleto_term = $4,
+         date = $5,
+         notes = $6
+     WHERE public_id = $1
+     RETURNING *`,
+    [uuid, legacyInt, methodStr, boleto_term ?? null, delivery_date, comment],
+  );
   return result.rows[0];
 };
 

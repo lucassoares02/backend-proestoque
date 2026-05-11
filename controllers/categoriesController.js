@@ -14,6 +14,23 @@ const findAll = async (req, res) => {
 };
 
 /**
+ * Get all Categories
+ */
+const findCategoriesSupplier = async (req, res) => {
+  const { id } = req.params;
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ error: "Invalid ID" });
+  }
+  try {
+    const data = await service.findCategoriesSupplier(id);
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error("Error fetching Categories Supplier:", error);
+    return res.status(500).json({ error: "Failed to fetch Categories Supplier" });
+  }
+};
+
+/**
  * Get Categories by ID
  */
 const find = async (req, res) => {
@@ -85,4 +102,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { findAll, find, create, update, remove };
+module.exports = { findAll, find, findCategoriesSupplier, create, update, remove };

@@ -2,33 +2,41 @@ const pool = require("../db");
 
 /**
  * Get All Products*/
-const findAll = async (supplier, company) => {
+const findAll = async (supplier, company, category) => {
   if (supplier == null || isNaN(supplier)) {
-    console.log("Dentro do if supplier nulo");
-    const query = `
-      WITH product_items_qty AS (
-    -- 🔹 Quantidade por produto + pack
+    console.log("Lista de produtos para Fornecedores");
+
+    const query = `WITH product_items_qty AS (
     SELECT
         oi.product_id,
         oi.package_id,
         CAST(SUM(oi.quantity) AS INTEGER) AS total_qty
     FROM order_items oi
+    JOIN orders o ON o.id = oi.order_id
+    WHERE o.supplier_id = $1
     GROUP BY oi.product_id, oi.package_id
 ),
 
 product_total_qty AS (
-    -- 🔹 Quantidade total do produto (todos os packs)
     SELECT
         oi.product_id,
         CAST(SUM(oi.quantity) AS INTEGER) AS quantity
     FROM order_items oi
+    JOIN orders o ON o.id = oi.order_id
+    WHERE o.supplier_id = $1
     GROUP BY oi.product_id
 )
 
 SELECT
     p.*,
 
-    -- 🔹 quantidade total do produto
+    json_build_object(
+        'id',        cat.id,
+        'name',      cat.name,
+        'slug',      cat.slug,
+        'parent_id', cat.parent_id
+    ) AS category,
+
     COALESCE(ptq.quantity, 0) AS quantity,
 
     COALESCE(imgs.images, '[]') AS images,
@@ -36,20 +44,19 @@ SELECT
 
 FROM products p
 
--- 🔹 quantidade total do produto
-LEFT JOIN product_total_qty ptq
-    ON ptq.product_id = p.id
+LEFT JOIN products_categories cat ON cat.id = p.category_id
 
--- 🔹 imagens
+LEFT JOIN product_total_qty ptq ON ptq.product_id = p.id
+
 LEFT JOIN (
     SELECT
         product_id,
         json_agg(
             json_build_object(
-                'id', id,
-                'url', url,
+                'id',         id,
+                'url',        url,
                 'sort_order', sort_order,
-                'type', type
+                'type',       type
             )
             ORDER BY sort_order NULLS LAST
         ) AS images
@@ -57,17 +64,16 @@ LEFT JOIN (
     GROUP BY product_id
 ) imgs ON imgs.product_id = p.id
 
--- 🔹 preços no novo formato (por pack)
 LEFT JOIN (
     SELECT
         t.product_id,
         json_agg(
             json_build_object(
-                'pack', t.pack,
+                'pack',        t.pack,
                 'description', t.description,
-                'pack_units', t.pack_units,
-                'quantity', t.client_quantity,
-                'prices', t.prices_list
+                'pack_units',  t.pack_units,
+                'quantity',    t.client_quantity,
+                'prices',      t.prices_list
             )
             ORDER BY t.pack
         ) AS prices
@@ -75,26 +81,23 @@ LEFT JOIN (
         SELECT
             pp.product_id,
             pk.package_id AS pack,
-            pk.quantity AS pack_units,
-            pkg.title AS description,
+            pk.quantity    AS pack_units,
+            pkg.title      AS description,
 
-            -- 🔹 quantidade nesse pack
             COALESCE(piq.total_qty, 0) AS client_quantity,
 
             json_agg(
                 json_build_object(
-                    'id', pp.id,
-                    'qty_min', pp.qty_min,
-                    'qty_max', pp.qty_max,
+                    'id',         pp.id,
+                    'qty_min',    pp.qty_min,
+                    'qty_max',    pp.qty_max,
                     'unit_price', pp.unit_price
                 )
                 ORDER BY pp.qty_min
             ) AS prices_list
         FROM products_prices pp
-        JOIN products_packages pk
-            ON pk.id = pp.product_package_id
-        JOIN packages pkg
-            ON pkg.id = pk.package_id
+        JOIN products_packages pk  ON pk.id  = pp.product_package_id
+        JOIN packages pkg           ON pkg.id = pk.package_id
         LEFT JOIN product_items_qty piq
             ON piq.product_id = pp.product_id
            AND piq.package_id = pk.package_id
@@ -110,15 +113,14 @@ LEFT JOIN (
 
 WHERE
     p.company_id = $1
-ORDER BY
-    p.id;
+    AND p.deleted_at IS NULL
+    ${category != 0 ? "AND p.category_id IN (SELECT id FROM products_categories WHERE id = $2 OR parent_id = $2)" : ""}
+ORDER BY p.active DESC, p.id;`;
 
-    `;
-
-    const result = await pool.query(query, [company]);
+    const result = await pool.query(query, category != 0 ? [company, category] : [company]);
     return result.rows;
   } else {
-    console.log("Dentro do else supplier com valor");
+    console.log("Lista de produtos para Clientes");
     const query = `
     WITH client_draft_items AS (
     -- 🔹 Quantidade do cliente por produto + pack
@@ -141,7 +143,8 @@ SELECT
     COALESCE(oi.quantity, 0) AS quantity,
 
     COALESCE(imgs.images, '[]') AS images,
-    COALESCE(prs.prices, '[]') AS prices
+    COALESCE(prs.prices, '[]') AS prices,
+    COALESCE(pvs.variants, '[]') AS variants
 
 FROM products p
 
@@ -226,14 +229,37 @@ LEFT JOIN (
     GROUP BY t.product_id
 ) prs ON prs.product_id = p.id
 
+-- 🔹 variações ativas + qty por variante no carrinho do cliente
+LEFT JOIN (
+    SELECT pv.product_id,
+      json_agg(json_build_object(
+        'id', pv.id, 'name', pv.name, 'sku', pv.sku, 'ean', pv.ean,
+        'weight', pv.weight, 'content', pv.content, 'price', pv.price,
+        'image_url', pv.image_url, 'active', pv.active, 'sort_order', pv.sort_order,
+        'quantity_in_cart', COALESCE(vqty.qty, 0)
+      ) ORDER BY pv.sort_order, pv.id) AS variants
+    FROM product_variants pv
+    LEFT JOIN (
+        SELECT oi.variant_id, SUM(oi.quantity)::INTEGER AS qty
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        WHERE o.company_id = $2 AND o.status = 'DRAFT'
+        GROUP BY oi.variant_id
+    ) vqty ON vqty.variant_id = pv.id
+    WHERE pv.active = true
+    GROUP BY pv.product_id
+) pvs ON pvs.product_id = p.id
+
 WHERE
     p.company_id = $1
+    AND p.active = true
+    ${category != 0 ? "AND p.category_id IN (SELECT id FROM products_categories WHERE id = $3 OR parent_id = $3)" : ""}
 ORDER BY
     p.id;
 
   `;
 
-    const result = await pool.query(query, [company, supplier]);
+    const result = await pool.query(query, category != 0 ? [company, supplier, category] : [company, supplier]);
     return result.rows;
   }
 };
@@ -260,7 +286,8 @@ const find = async (id, client) => {
         p.*,
         COALESCE(imgs.images, '[]') AS images,
         COALESCE(prs.prices, '[]') AS prices,
-        COALESCE(pps.packages, '[]') AS packages
+        COALESCE(pps.packages, '[]') AS packages,
+        COALESCE(pvs.variants, '[]') AS variants
     FROM products p
 
     -- IMAGENS
@@ -279,6 +306,38 @@ const find = async (id, client) => {
         FROM products_images
         GROUP BY product_id
     ) imgs ON imgs.product_id = p.id
+
+    -- VARIANTES (com quantidade do cliente por variante)
+    LEFT JOIN (
+        SELECT
+            pv.product_id,
+            json_agg(
+                json_build_object(
+                    'id',               pv.id,
+                    'name',             pv.name,
+                    'sku',              pv.sku,
+                    'ean',              pv.ean,
+                    'weight',           pv.weight,
+                    'content',          pv.content,
+                    'price',            pv.price,
+                    'image_url',        pv.image_url,
+                    'active',           pv.active,
+                    'sort_order',       pv.sort_order,
+                    'quantity_in_cart', COALESCE(vqty.qty, 0)
+                )
+                ORDER BY pv.sort_order, pv.id
+            ) AS variants
+        FROM product_variants pv
+        LEFT JOIN (
+            SELECT oi.variant_id, SUM(oi.quantity)::INTEGER AS qty
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            WHERE o.company_id = $2 AND o.status = 'DRAFT'
+            GROUP BY oi.variant_id
+        ) vqty ON vqty.variant_id = pv.id
+        WHERE pv.active = true
+        GROUP BY pv.product_id
+    ) pvs ON pvs.product_id = p.id
 
     -- PREÇOS AGRUPADOS POR PACKAGE + QUANTITY DO CLIENTE
     LEFT JOIN (
@@ -370,7 +429,8 @@ SELECT
     p.*,
     COALESCE(imgs.images, '[]') AS images,
     COALESCE(prs.prices, '[]') AS prices,
-    COALESCE(pps.packages, '[]') AS packages
+    COALESCE(pps.packages, '[]') AS packages,
+    COALESCE(pvs.variants, '[]') AS variants
 FROM products p
 
 -- IMAGENS
@@ -389,6 +449,30 @@ LEFT JOIN (
     FROM products_images
     GROUP BY product_id
 ) imgs ON imgs.product_id = p.id
+
+-- VARIANTES
+LEFT JOIN (
+    SELECT
+        product_id,
+        json_agg(
+            json_build_object(
+                'id',         id,
+                'name',       name,
+                'sku',        sku,
+                'ean',        ean,
+                'weight',     weight,
+                'content',    content,
+                'price',      price,
+                'image_url',  image_url,
+                'active',     active,
+                'sort_order', sort_order
+            )
+            ORDER BY sort_order, id
+        ) AS variants
+    FROM product_variants
+    WHERE active = true
+    GROUP BY product_id
+) pvs ON pvs.product_id = p.id
 
 -- PREÇOS AGRUPADOS POR PACKAGE + QUANTITY
 LEFT JOIN (
@@ -653,7 +737,6 @@ const create = async (data) => {
 };
 
 const update = async (data) => {
-  // espera um objeto com propriedades em camelCase + id
   const {
     id,
     sku,
@@ -666,7 +749,6 @@ const update = async (data) => {
     unitsPerPackage,
     unitOfMeasure,
     weight,
-    volume,
     active,
     visibility,
     createdAt,
@@ -674,11 +756,25 @@ const update = async (data) => {
     deletedAt,
     categoryId,
     companyId,
+    image,
   } = data;
-  const result = await pool.query(
-    "UPDATE products SET id = $1, sku = $2, ean = $3, name = $4, description = $5, complement = $6, brand = $7, package_type = $8, units_per_package = $9, unit_of_measure = $10, weight = $11, volume = $12, active = $13, visibility = $14, created_at = $15, updated_at = $16, deleted_at = $17, category_id = $18, company_id = $19 WHERE id = $20 RETURNING *",
-    [
-      id,
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const updateProductQuery = `
+      UPDATE products
+      SET sku = $1, ean = $2, name = $3, description = $4, complement = $5, brand = $6,
+          package_type = $7, units_per_package = $8, unit_of_measure = $9, weight = $10,
+          active = $11, visibility = $12, created_at = $13, updated_at = $14, deleted_at = $15,
+          category_id = $16, company_id = $17
+      WHERE id = $18
+      RETURNING *;
+    `;
+
+    const productValues = [
       sku,
       ean,
       name,
@@ -689,7 +785,6 @@ const update = async (data) => {
       unitsPerPackage,
       unitOfMeasure,
       weight,
-      volume,
       active,
       visibility,
       createdAt,
@@ -698,9 +793,35 @@ const update = async (data) => {
       categoryId,
       companyId,
       id,
-    ],
-  );
-  return result.rows[0];
+    ];
+
+    const productRes = await client.query(updateProductQuery, productValues);
+    const product = productRes.rows[0];
+
+    let imageRow = null;
+    if (image) {
+      await client.query("DELETE FROM products_images WHERE product_id = $1 AND type = $2", [id, "main"]);
+
+      const insertImageQuery = `
+        INSERT INTO products_images (product_id, url, sort_order, type)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *;
+      `;
+      const imageRes = await client.query(insertImageQuery, [id, image, 1, "main"]);
+      imageRow = imageRes.rows[0];
+    }
+
+    await client.query("COMMIT");
+
+    product.images = imageRow ? [imageRow] : [];
+
+    return product;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 const remove = async (id) => {

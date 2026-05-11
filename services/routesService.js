@@ -1,6 +1,9 @@
 const pool = require("../db");
 const axios = require("axios");
 
+const VALID_FREQUENCIES = ["weekly", "biweekly", "monthly"];
+const _normFreq = (v) => (VALID_FREQUENCIES.includes(v) ? v : "weekly");
+
 /**
  * Get All Routes
  */
@@ -16,6 +19,7 @@ const findAll = async (state, company) => {
       r.active,
       r.min_delivery_notice_days,
       r.type AS schedule_type,
+      r.frequency,
 
       COALESCE(
         json_agg(
@@ -54,19 +58,21 @@ const create = async (data) => {
   const client = await pool.connect();
 
   try {
-    const { company_id, name, state, state_description, description, active, cities, schedule_type, days, min_delivery_notice_days } = data;
+    const { company_id, name, state, state_description, description, active, cities, schedule_type, days, min_delivery_notice_days, frequency } =
+      data;
+    const freq = _normFreq(frequency);
 
     await client.query("BEGIN");
 
     const routeResult = await client.query(
       `
-      INSERT INTO routes 
-        (company_id, name, state, state_description, description, active, type, min_delivery_notice_days)
-      VALUES 
-        ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO routes
+        (company_id, name, state, state_description, description, active, type, min_delivery_notice_days, frequency)
+      VALUES
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
       `,
-      [company_id, name, state, state_description, description, active, schedule_type, min_delivery_notice_days]
+      [company_id, name, state, state_description, description, active, schedule_type, min_delivery_notice_days, freq],
     );
 
     const route = routeResult.rows[0];
@@ -118,7 +124,9 @@ const update = async (data) => {
   const client = await pool.connect();
 
   try {
-    const { id, company_id, name, state, state_description, description, active, cities, schedule_type, days, min_delivery_notice_days } = data;
+    const { id, company_id, name, state, state_description, description, active, cities, schedule_type, days, min_delivery_notice_days, frequency } =
+      data;
+    const freq = _normFreq(frequency);
 
     await client.query("BEGIN");
 
@@ -135,11 +143,12 @@ const update = async (data) => {
         active = $6,
         type = $7,
         min_delivery_notice_days = $8,
+        frequency = $9,
         updated_at = NOW()
-      WHERE id = $9
+      WHERE id = $10
       RETURNING *
       `,
-      [company_id, name, state, state_description, description, active, schedule_type, min_delivery_notice_days, id]
+      [company_id, name, state, state_description, description, active, schedule_type, min_delivery_notice_days, freq, id],
     );
 
     const route = routeResult.rows[0];
@@ -232,7 +241,7 @@ const findAllAvailableRoutes = async (supplier, company) => {
 WITH params AS (
   SELECT
     CURRENT_DATE AS today,
-    CURRENT_DATE + INTERVAL '14 days' AS end_date
+    CURRENT_DATE + INTERVAL '32 days' AS end_date
 ),
 
 -- Empresa cliente (municipio)
@@ -255,9 +264,12 @@ valid_calendar AS (
   SELECT
     r.id AS route_id,
     r.type,
+    r.frequency,
     r.min_delivery_notice_days,
     gs::date AS delivery_date,
-    EXTRACT(DOW FROM gs)::int AS dow
+    EXTRACT(DOW  FROM gs)::int AS dow,
+    EXTRACT(WEEK FROM gs)::int AS iso_week,
+    EXTRACT(DAY  FROM gs)::int AS day_of_month
   FROM routes r
   CROSS JOIN params p
   CROSS JOIN generate_series(
@@ -289,6 +301,11 @@ type_1_dates AS (
     ON rd.route_id = vc.route_id
    AND rd.route_day = vc.dow
   WHERE vc.type = 1
+    AND (
+      vc.frequency = 'weekly'
+      OR (vc.frequency = 'biweekly' AND (vc.iso_week % 2) = 0)
+      OR (vc.frequency = 'monthly'  AND vc.day_of_month BETWEEN 1 AND 7)
+    )
 ),
 
 -- Regra para type = 2 (range)
@@ -307,6 +324,9 @@ type_2_base AS (
     vc.route_id,
     vc.delivery_date,
     vc.dow,
+    vc.frequency,
+    vc.iso_week,
+    vc.day_of_month,
     r.range_start,
     r.range_end
   FROM valid_calendar vc
@@ -331,6 +351,11 @@ type_2_dates AS (
   JOIN type_2_valid_ranges vr
     ON vr.route_id = t.route_id
   WHERE t.dow BETWEEN t.range_start AND t.range_end
+    AND (
+      t.frequency = 'weekly'
+      OR (t.frequency = 'biweekly' AND (t.iso_week % 2) = 0)
+      OR (t.frequency = 'monthly'  AND t.day_of_month BETWEEN 1 AND 7)
+    )
 ),
 
 -- União de todas as datas válidas
@@ -354,7 +379,7 @@ JOIN routes r
   ON r.id = d.route_id
 ORDER BY d.delivery_date, r.name;
 `,
-    [supplier, company]
+    [supplier, company],
   );
 
   return result.rows || null;
@@ -366,7 +391,7 @@ ORDER BY d.delivery_date, r.name;
 const findStatesSelected = async (id) => {
   const result = await pool.query(
     "select state as id, state_description as nome from routes where company_id = $1 group by state, state_description",
-    [id]
+    [id],
   );
 
   return result.rows || null;

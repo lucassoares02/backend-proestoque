@@ -22,7 +22,11 @@ const countOrdersItems = async (company) => {
 };
 
 const create = async (data) => {
-  const { order_id, company_id, supplier_id, product_id, quantity, unit_price, total_price, package_id } = data;
+  const { order_id, company_id, supplier_id, product_id, quantity, unit_price, total_price, package_id, buy_together_campaign_id, buy_together_applied, variant_id } = data;
+
+  console.log("[ORDERS_ITEM CREATE] payload received:", {
+    order_id, company_id, supplier_id, product_id, package_id, variant_id, quantity,
+  });
 
   const client = await pool.connect();
 
@@ -65,37 +69,73 @@ const create = async (data) => {
       }
     }
 
-    // 🔹 Remove item apenas daquele package
+    // 🔹 Remove item discriminando por package + variant (IS NOT DISTINCT FROM trata NULL = NULL)
     if (parsedQuantity === 0) {
       await client.query(
         `
         DELETE FROM order_items
         WHERE order_id = $1
           AND product_id = $2
-          AND package_id = $3
+          AND package_id IS NOT DISTINCT FROM $3
+          AND variant_id IS NOT DISTINCT FROM $4
         `,
-        [finalOrderId, product_id, package_id],
+        [finalOrderId, product_id, package_id ?? null, variant_id ?? null],
       );
     } else {
-      // 🔹 Insere ou atualiza por (order_id, product_id, package_id)
-      const res = await client.query(
+      // 🔹 Upsert manual: tenta UPDATE primeiro (IS NOT DISTINCT FROM trata NULL = NULL),
+      //    se não existir item, faz INSERT. Não depende de unique constraint
+      //    com NULLS NOT DISTINCT, que só existe em PostgreSQL 15+.
+      const updateRes = await client.query(
         `
-        INSERT INTO order_items
-          (order_id, product_id, package_id, quantity, unit_price, total_price)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (order_id, product_id, package_id)
-        DO UPDATE SET
-          quantity = EXCLUDED.quantity,
-          unit_price = EXCLUDED.unit_price,
-          total_price = EXCLUDED.total_price,
-          updated_at = NOW()
+        UPDATE order_items
+        SET quantity = $4,
+            unit_price = $5,
+            total_price = $6,
+            buy_together_campaign_id = $7,
+            buy_together_applied = $8,
+            updated_at = NOW()
+        WHERE order_id = $1
+          AND product_id = $2
+          AND package_id IS NOT DISTINCT FROM $3
+          AND variant_id IS NOT DISTINCT FROM $9
         RETURNING *
         `,
-        [finalOrderId, product_id, package_id, parsedQuantity, unit_price, total_price],
+        [
+          finalOrderId,
+          product_id,
+          package_id ?? null,
+          parsedQuantity,
+          unit_price,
+          total_price,
+          buy_together_campaign_id ?? null,
+          buy_together_applied ?? false,
+          variant_id ?? null,
+        ],
       );
 
-      if (!res.rows.length) {
-        throw new Error("Item não foi inserido nem atualizado");
+      if (updateRes.rowCount === 0) {
+        const insertRes = await client.query(
+          `
+          INSERT INTO order_items
+            (order_id, product_id, package_id, quantity, unit_price, total_price, buy_together_campaign_id, buy_together_applied, variant_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          RETURNING *
+          `,
+          [
+            finalOrderId,
+            product_id,
+            package_id ?? null,
+            parsedQuantity,
+            unit_price,
+            total_price,
+            buy_together_campaign_id ?? null,
+            buy_together_applied ?? false,
+            variant_id ?? null,
+          ],
+        );
+        if (!insertRes.rows.length) {
+          throw new Error("Item não foi inserido");
+        }
       }
     }
 

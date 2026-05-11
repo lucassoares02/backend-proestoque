@@ -4,9 +4,9 @@ const service = require("../services/productsService");
  * Get all Products
  */
 const findAll = async (req, res) => {
-  const { company, supplier } = req.params;
+  const { company, supplier, category } = req.params;
   try {
-    const data = await service.findAll(supplier, company);
+    const data = await service.findAll(supplier, company, category);
     return res.status(200).json(data);
   } catch (error) {
     console.error("Error fetching Products:", error);
@@ -54,13 +54,13 @@ const create = async (req, res) => {
  * Update Products
  */
 const update = async (req, res) => {
-  const { id } = req.params;
   const products = req.body;
-  if (!id || isNaN(id)) {
+  if (!products || isNaN(products.id)) {
     return res.status(400).json({ error: "Invalid ID" });
   }
+  console.log(products);
   try {
-    const updated = await service.update({ ...products, id: parseInt(id) });
+    const updated = await service.update({ ...products, id: parseInt(products.id) });
     if (!updated) return res.status(404).json({ error: "Products not found" });
     return res.status(200).json(updated);
   } catch (error) {

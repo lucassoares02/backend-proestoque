@@ -1,5 +1,7 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
+
 const user = require("../controllers/userController");
 const login = require("../controllers/loginController");
 const authMiddleware = require("../src/middlewares/middleware");
@@ -14,6 +16,19 @@ const routes = require("../controllers/routesController");
 const orders = require("../controllers/ordersController");
 const orders_item = require("../controllers/orders_itemController");
 const coupons = require("../controllers/couponsController");
+const files = require("../controllers/filesController");
+const brands = require("../controllers/brandsController");
+const buyTogether = require("../controllers/buyTogetherController");
+const cartSuggestions = require("../controllers/cartSuggestionsController");
+const supplierOrders = require("../controllers/supplierOrdersController");
+const supplierDashboard = require("../controllers/supplierDashboardController");
+const buyerDashboard = require("../controllers/buyerDashboardController");
+const support = require("../controllers/supportTicketsController");
+const paymentSettings = require("../controllers/paymentSettingsController");
+const checkoutPayment = require("../controllers/checkoutPaymentController");
+const productVariants = require("../controllers/productVariantsController");
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 router.get("/", (req, res) => {
   res.send("API is running 🚀");
@@ -42,15 +57,23 @@ router.get("/account", authMiddleware, account.find);
 router.patch("/account", authMiddleware, account.update);
 
 //products
-router.get("/products/company/:supplier/:company", products.findAll);
-router.get("/products/:id/:client", products.find);
+router.get("/products/company/:supplier/:company/:category", products.findAll);
 router.post("/products", products.create);
-router.patch("/products/:id", products.update);
+router.patch("/products", products.update);
 router.delete("/products/:id", products.remove);
+
+//product variants — declaradas antes da wildcard /:id/:client para evitar conflito de rota
+router.get("/products/:id/variants", productVariants.findAll);
+router.post("/products/:id/variants", productVariants.create);
+router.put("/products/:id/variants/:variantId", productVariants.update);
+router.delete("/products/:id/variants/:variantId", productVariants.remove);
+
+router.get("/products/:id/:client", products.find);
 
 //categories
 router.get("/categories", categories.findAll);
 router.get("/categories/:id", categories.find);
+router.get("/categories/supplier/:id", categories.findCategoriesSupplier);
 router.post("/categories", categories.create);
 router.patch("/categories/:id", categories.update);
 router.delete("/categories/:id", categories.remove);
@@ -96,5 +119,65 @@ router.get("/coupons/:id", coupons.find);
 router.post("/coupons", coupons.create);
 router.patch("/coupons/:id", coupons.update);
 router.delete("/coupons/:id", coupons.remove);
+
+//files
+router.post("/files/upload", upload.single("file"), files.upload);
+
+//brands
+router.get("/brands/company/:company", brands.findAll);
+router.get("/brands/:id", brands.find);
+router.post("/brands", brands.create);
+router.patch("/brands/:id", brands.update);
+router.delete("/brands/:id", brands.remove);
+
+//buy-together
+router.get("/buy-together/company/:company", buyTogether.findAll);
+router.get("/buy-together/products/:company", buyTogether.getProducts);
+router.post("/buy-together/validate", buyTogether.validateCart);
+router.get("/buy-together/:id", buyTogether.find);
+router.post("/buy-together", buyTogether.create);
+router.patch("/buy-together/:id", buyTogether.update);
+router.delete("/buy-together/:id", buyTogether.remove);
+
+//cart suggestions
+router.post("/cart/suggestions", cartSuggestions.getSuggestions);
+
+//supplier orders
+router.get("/supplier-orders/:supplier", supplierOrders.findAll);
+router.get("/supplier-orders/:supplier/:uuid", supplierOrders.find);
+router.post("/supplier-orders/:supplier/:uuid/review", supplierOrders.review);
+
+//supplier dashboard
+router.get("/supplier/dashboard/:supplier", supplierDashboard.getDashboard);
+
+//buyer dashboard
+router.get("/buyer/dashboard/:company", buyerDashboard.getDashboard);
+
+//support tickets — cliente
+router.post("/support/tickets",                             support.createTicket);
+router.get ("/support/tickets/:company",                    support.listByCustomer);
+router.get ("/support/tickets/:company/:uuid",              support.findByCustomer);
+router.post("/support/tickets/:uuid/messages",              support.customerSendMessage);
+router.post("/support/tickets/:uuid/close",                 support.customerClose);
+router.post("/support/tickets/:uuid/reopen",                support.customerReopen);
+
+//support tickets — fornecedor
+router.get ("/supplier/support/tickets/:supplier",          support.listBySupplier);
+router.get ("/supplier/support/tickets/:supplier/:uuid",    support.findBySupplier);
+router.post("/supplier/support/tickets/:uuid/messages",     support.supplierSendMessage);
+router.post("/supplier/support/tickets/:uuid/close",        support.supplierClose);
+
+//checkout payment options
+router.get("/checkout/payment-options/:supplier/:company", checkoutPayment.paymentOptions);
+
+//payment settings
+router.get ("/payment-settings/resolve/:supplier/:customer",          paymentSettings.resolve);
+router.get ("/payment-settings/:supplier",                            paymentSettings.getGeneral);
+router.put ("/payment-settings/:supplier",                            paymentSettings.putGeneral);
+router.get ("/payment-settings/:supplier/known-customers",            paymentSettings.listKnownCustomers);
+router.get ("/payment-settings/:supplier/customers",                  paymentSettings.listCustomers);
+router.get ("/payment-settings/:supplier/customers/:customer",        paymentSettings.getCustomer);
+router.put ("/payment-settings/:supplier/customers/:customer",        paymentSettings.putCustomer);
+router.delete("/payment-settings/:supplier/customers/:customer",      paymentSettings.deleteCustomer);
 
 module.exports = router;
