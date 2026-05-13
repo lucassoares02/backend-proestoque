@@ -15,9 +15,9 @@ const find = async (id) => {
 
 const findPackagesProduct = async (id) => {
   const result = await pool.query(
-    // "select p.* from packages p left join products_packages pp2 on pp2.package_id = p.id left join products_prices pp on pp.product_package_id = pp2.id where pp.product_id = $1 group by p.id order by p.id",
     `SELECT DISTINCT ON (p.id)
         p.id,
+        pp2.id AS product_package_id,
         p.title,
         pp2.quantity as "quantity",
         (pp.unit_price/pp2.quantity) AS value
@@ -28,7 +28,6 @@ const findPackagesProduct = async (id) => {
     ORDER BY p.id, pp.unit_price;`,
     [id]
   );
-  ("");
   return result.rows || null;
 };
 

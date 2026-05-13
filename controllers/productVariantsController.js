@@ -11,6 +11,17 @@ const findAll = async (req, res) => {
   }
 };
 
+const getPriceTiers = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const data = await service.getProductPriceTiers(Number(id));
+    return res.status(200).json({ success: true, data, error: null });
+  } catch (err) {
+    console.error("Error fetching price tiers:", err);
+    return res.status(500).json({ success: false, data: null, error: "Failed to fetch price tiers" });
+  }
+};
+
 const create = async (req, res) => {
   const { id } = req.params;
   try {
@@ -48,4 +59,27 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { findAll, create, update, remove };
+const getOverrideCount = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const count = await service.getOverriddenCount(Number(id));
+    return res.status(200).json({ success: true, data: { count }, error: null });
+  } catch (err) {
+    console.error("Error fetching variant override count:", err);
+    return res.status(500).json({ success: false, data: null, error: "Failed to fetch override count" });
+  }
+};
+
+const syncVariantPrices = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await service.syncAllPrices(Number(id));
+    return res.status(200).json({ success: true, data: result, error: null });
+  } catch (err) {
+    const status = err.status || 500;
+    console.error("Error syncing variant prices:", err);
+    return res.status(status).json({ success: false, data: null, error: err.message });
+  }
+};
+
+module.exports = { findAll, getPriceTiers, getOverrideCount, syncVariantPrices, create, update, remove };

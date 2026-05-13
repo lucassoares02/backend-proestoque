@@ -27,6 +27,7 @@ const support = require("../controllers/supportTicketsController");
 const paymentSettings = require("../controllers/paymentSettingsController");
 const checkoutPayment = require("../controllers/checkoutPaymentController");
 const productVariants = require("../controllers/productVariantsController");
+const orderAttachments = require("../controllers/orderAttachmentsController");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -64,7 +65,10 @@ router.delete("/products/:id", products.remove);
 
 //product variants — declaradas antes da wildcard /:id/:client para evitar conflito de rota
 router.get("/products/:id/variants", productVariants.findAll);
+router.get("/products/:id/price-tiers", productVariants.getPriceTiers);
+router.get("/products/:id/variant-overrides-count", productVariants.getOverrideCount);
 router.post("/products/:id/variants", productVariants.create);
+router.post("/products/:id/sync-variant-prices", productVariants.syncVariantPrices);
 router.put("/products/:id/variants/:variantId", productVariants.update);
 router.delete("/products/:id/variants/:variantId", productVariants.remove);
 
@@ -104,6 +108,12 @@ router.get("/orders/:uuid", orders.find);
 router.post("/orders", orders.create);
 router.patch("/orders/:id", orders.update);
 router.delete("/orders/:id", orders.remove);
+
+//order attachments (nota fiscal / boleto) — upload exclusivo do fornecedor
+router.post("/orders/:uuid/invoice", upload.single("file"), orderAttachments.uploadInvoice);
+router.post("/orders/:uuid/boleto",  upload.single("file"), orderAttachments.uploadBoleto);
+router.delete("/orders/:uuid/invoice", orderAttachments.deleteInvoice);
+router.delete("/orders/:uuid/boleto",  orderAttachments.deleteBoleto);
 
 //orders_item
 router.get("/orders-item", orders_item.findAll);

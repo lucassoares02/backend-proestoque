@@ -229,7 +229,7 @@ const _getCategories = async (companyId) => {
     FROM order_items oi
     JOIN orders o ON o.id = oi.order_id
     JOIN products p ON p.id = oi.product_id
-    LEFT JOIN categories cat ON cat.id = p.category_id
+    LEFT JOIN products_categories cat ON cat.id = p.category_id
     WHERE o.company_id = $1
       AND o.status = ANY($2::varchar[])
       AND o.created_at >= (CURRENT_DATE - INTERVAL '30 days')
@@ -244,7 +244,7 @@ const _getCategories = async (companyId) => {
 const _getRecentOrders = async (companyId) => {
   const sql = `
     SELECT o.id,
-           o.uuid,
+           o.public_id AS uuid,
            o.total_value,
            o.status,
            o.created_at,

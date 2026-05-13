@@ -19,6 +19,9 @@ SELECT
   s.logo AS supplier_logo,
   s.color AS supplier_color,
 
+  -- 🔹 pedido mínimo do fornecedor
+  ps.minimum_order_amount,
+
   COALESCE(
     json_agg(
       json_build_object(
@@ -58,6 +61,10 @@ FROM orders o
 LEFT JOIN companies s
   ON s.id = o.supplier_id
 
+-- 🔹 configurações de pagamento / pedido mínimo
+LEFT JOIN payment_settings ps
+  ON ps.supplier_id = o.supplier_id
+
 LEFT JOIN order_items oi
   ON oi.order_id = o.id
 LEFT JOIN products p
@@ -80,7 +87,8 @@ GROUP BY
   s.razao_social,
   s.nome_fantasia,
   s.logo,
-  s.color
+  s.color,
+  ps.minimum_order_amount
 HAVING COUNT(oi.id) > 0
 ORDER BY o.id DESC;
 
@@ -114,6 +122,9 @@ const find = async (uuid) => {
       s.nome_fantasia AS supplier_nome_fantasia,
       s.logo AS supplier_logo,
       s.color AS supplier_color,
+
+      -- 🔹 pedido mínimo do fornecedor
+      ps.minimum_order_amount,
 
       COALESCE(
         json_agg(
@@ -153,6 +164,10 @@ const find = async (uuid) => {
     LEFT JOIN companies s
       ON s.id = o.supplier_id
 
+    -- 🔹 configurações de pagamento / pedido mínimo
+    LEFT JOIN payment_settings ps
+      ON ps.supplier_id = o.supplier_id
+
     LEFT JOIN order_items oi
       ON oi.order_id = o.id
     LEFT JOIN products p
@@ -175,7 +190,8 @@ const find = async (uuid) => {
       s.razao_social,
       s.nome_fantasia,
       s.logo,
-      s.color
+      s.color,
+      ps.minimum_order_amount
 
     HAVING COUNT(oi.id) > 0
     `,
