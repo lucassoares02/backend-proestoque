@@ -57,11 +57,20 @@ const findProvidersCity = async (req, res) => {
   }
 };
 
+const HEX_RE = /^#[0-9A-Fa-f]{6}$/;
+
 /**
  * Patch update Company
  */
 const update = async (req, res) => {
   const company = req.body;
+
+  if (company.color !== undefined && company.color !== null && company.color !== "") {
+    if (!HEX_RE.test(company.color)) {
+      return res.status(400).json({ error: "color deve ser um hexadecimal válido (ex: #1E3A5F)" });
+    }
+  }
+
   try {
     const updatedItem = await service.update(company);
     return res.status(200).json(updatedItem);

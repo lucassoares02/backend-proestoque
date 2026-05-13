@@ -1,5 +1,49 @@
 const pool = require("../db");
 
+const parseIntegerOrNull = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isNaN(number) ? null : parseInt(number, 10);
+};
+
+const productsBrandIdColumnExists = async (client) => {
+  const { rows } = await client.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'products'
+       AND column_name = 'brand_id'
+     LIMIT 1`,
+  );
+  return rows.length > 0;
+};
+
+const resolveProductBrand = async (client, { brand, brandId, companyId }) => {
+  const manualBrand = typeof brand === "string" && brand.trim() !== "" ? brand.trim() : null;
+  const parsedBrandId = parseIntegerOrNull(brandId);
+
+  if (!parsedBrandId) {
+    return { brand: manualBrand, brandId: null };
+  }
+
+  const params = [parsedBrandId];
+  let companyFilter = "";
+  const parsedCompanyId = parseIntegerOrNull(companyId);
+  if (parsedCompanyId) {
+    params.push(parsedCompanyId);
+    companyFilter = "AND company_id = $2";
+  }
+
+  const { rows } = await client.query(`SELECT id, name FROM brands WHERE id = $1 ${companyFilter} LIMIT 1`, params);
+  if (rows.length === 0) {
+    return { brand: manualBrand, brandId: null };
+  }
+
+  return {
+    brand: rows[0].name || manualBrand,
+    brandId: rows[0].id,
+  };
+};
+
 /**
  * Get All Products*/
 const findAll = async (supplier, company, category) => {
@@ -229,23 +273,42 @@ LEFT JOIN (
     GROUP BY t.product_id
 ) prs ON prs.product_id = p.id
 
--- 🔹 variações ativas + qty por variante no carrinho do cliente
+-- 🔹 variações ativas + qty por variante + preços próprios da variação
 LEFT JOIN (
     SELECT pv.product_id,
       json_agg(json_build_object(
         'id', pv.id, 'name', pv.name, 'sku', pv.sku, 'ean', pv.ean,
         'weight', pv.weight, 'content', pv.content, 'price', pv.price,
         'image_url', pv.image_url, 'active', pv.active, 'sort_order', pv.sort_order,
-        'quantity_in_cart', COALESCE(vqty.qty, 0)
+        'quantity_in_cart',  COALESCE(vqty.total_qty, 0),
+        'cart_quantities',   COALESCE(vqty.qty_per_pack, '[]'),
+        'prices', COALESCE(vprices.price_list, '[]')
       ) ORDER BY pv.sort_order, pv.id) AS variants
     FROM product_variants pv
     LEFT JOIN (
-        SELECT oi.variant_id, SUM(oi.quantity)::INTEGER AS qty
-        FROM order_items oi
-        JOIN orders o ON o.id = oi.order_id
-        WHERE o.company_id = $2 AND o.status = 'DRAFT'
-        GROUP BY oi.variant_id
+        SELECT variant_id,
+          SUM(pkg_qty)::INTEGER AS total_qty,
+          json_agg(json_build_object('package_id', package_id, 'qty', pkg_qty)) AS qty_per_pack
+        FROM (
+          SELECT oi.variant_id, oi.package_id, SUM(oi.quantity)::INTEGER AS pkg_qty
+          FROM order_items oi
+          JOIN orders o ON o.id = oi.order_id
+          WHERE o.company_id = $2 AND o.status = 'DRAFT'
+          GROUP BY oi.variant_id, oi.package_id
+        ) _vqty_sub
+        GROUP BY variant_id
     ) vqty ON vqty.variant_id = pv.id
+    LEFT JOIN (
+        SELECT variant_id,
+          json_agg(json_build_object(
+            'id',               id,
+            'product_price_id', product_price_id,
+            'unit_price',       unit_price,
+            'is_overridden',    is_overridden
+          ) ORDER BY product_price_id) AS price_list
+        FROM product_variant_prices
+        GROUP BY variant_id
+    ) vprices ON vprices.variant_id = pv.id
     WHERE pv.active = true
     GROUP BY pv.product_id
 ) pvs ON pvs.product_id = p.id
@@ -307,7 +370,7 @@ const find = async (id, client) => {
         GROUP BY product_id
     ) imgs ON imgs.product_id = p.id
 
-    -- VARIANTES (com quantidade do cliente por variante)
+    -- VARIANTES (com quantidade do cliente por variante e preços próprios)
     LEFT JOIN (
         SELECT
             pv.product_id,
@@ -323,18 +386,37 @@ const find = async (id, client) => {
                     'image_url',        pv.image_url,
                     'active',           pv.active,
                     'sort_order',       pv.sort_order,
-                    'quantity_in_cart', COALESCE(vqty.qty, 0)
+                    'quantity_in_cart', COALESCE(vqty.total_qty, 0),
+                    'cart_quantities',  COALESCE(vqty.qty_per_pack, '[]'),
+                    'prices',           COALESCE(vprices.price_list, '[]')
                 )
                 ORDER BY pv.sort_order, pv.id
             ) AS variants
         FROM product_variants pv
         LEFT JOIN (
-            SELECT oi.variant_id, SUM(oi.quantity)::INTEGER AS qty
-            FROM order_items oi
-            JOIN orders o ON o.id = oi.order_id
-            WHERE o.company_id = $2 AND o.status = 'DRAFT'
-            GROUP BY oi.variant_id
+            SELECT variant_id,
+              SUM(pkg_qty)::INTEGER AS total_qty,
+              json_agg(json_build_object('package_id', package_id, 'qty', pkg_qty)) AS qty_per_pack
+            FROM (
+              SELECT oi.variant_id, oi.package_id, SUM(oi.quantity)::INTEGER AS pkg_qty
+              FROM order_items oi
+              JOIN orders o ON o.id = oi.order_id
+              WHERE o.company_id = $2 AND o.status = 'DRAFT'
+              GROUP BY oi.variant_id, oi.package_id
+            ) _vqty_sub
+            GROUP BY variant_id
         ) vqty ON vqty.variant_id = pv.id
+        LEFT JOIN (
+            SELECT variant_id,
+              json_agg(json_build_object(
+                'id',               id,
+                'product_price_id', product_price_id,
+                'unit_price',       unit_price,
+                'is_overridden',    is_overridden
+              ) ORDER BY product_price_id) AS price_list
+            FROM product_variant_prices
+            GROUP BY variant_id
+        ) vprices ON vprices.variant_id = pv.id
         WHERE pv.active = true
         GROUP BY pv.product_id
     ) pvs ON pvs.product_id = p.id
@@ -559,6 +641,7 @@ const create = async (data) => {
     description,
     complement,
     brand,
+    brandId,
     packageType,
     unitsPerPackage,
     unitOfMeasure,
@@ -578,34 +661,45 @@ const create = async (data) => {
 
   try {
     await client.query("BEGIN");
+    const resolvedBrand = await resolveProductBrand(client, {
+      brand,
+      brandId: brandId ?? data.brand_id,
+      companyId,
+    });
+    const hasBrandId = await productsBrandIdColumnExists(client);
+
+    const productColumns = [
+      "sku",
+      "ean",
+      "name",
+      "description",
+      "complement",
+      "brand",
+      "package_type",
+      "units_per_package",
+      "unit_of_measure",
+      "weight",
+      "active",
+      "visibility",
+      "category_id",
+      "company_id",
+      "content",
+      "master_package",
+    ];
+    const productValues = [sku, ean, name, description, complement, resolvedBrand.brand, packageType, unitsPerPackage, unitOfMeasure, weight, active, visibility, categoryId, companyId, content, masterPackage];
+
+    if (hasBrandId) {
+      productColumns.push("brand_id");
+      productValues.push(resolvedBrand.brandId);
+    }
 
     const insertProductQuery = `
       INSERT INTO products
-      (sku, ean, name, description, complement, brand, package_type, units_per_package, unit_of_measure,
-       weight, active, visibility, category_id, company_id, content, master_package)
+      (${productColumns.join(", ")})
       VALUES
-      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      (${productValues.map((_, index) => `$${index + 1}`).join(", ")})
       RETURNING *;
     `;
-
-    const productValues = [
-      sku,
-      ean,
-      name,
-      description,
-      complement,
-      brand,
-      packageType,
-      unitsPerPackage,
-      unitOfMeasure,
-      weight,
-      active,
-      visibility,
-      categoryId,
-      companyId,
-      content,
-      masterPackage,
-    ];
 
     const productRes = await client.query(insertProductQuery, productValues);
     const product = productRes.rows[0];
@@ -736,6 +830,52 @@ const create = async (data) => {
   }
 };
 
+const toNumberOrNull = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isNaN(number) ? null : number;
+};
+
+const toIntegerOrNull = (value) => {
+  const number = toNumberOrNull(value);
+  return number === null ? null : parseInt(number, 10);
+};
+
+const productVariantPricesTableExists = async (client) => {
+  const { rows } = await client.query(
+    `SELECT 1 FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'product_variant_prices' LIMIT 1`,
+  );
+  return rows.length > 0;
+};
+
+const flattenPriceTiers = (packagePriceTiers) => {
+  const flatPrices = [];
+
+  for (const item of packagePriceTiers) {
+    const parentPackId = item.pack ?? item.package_id ?? item.packageId ?? null;
+    const parentProductPackageId = item.product_package_id ?? item.productPackageId ?? null;
+
+    if (Array.isArray(item.prices)) {
+      for (const tier of item.prices) {
+        flatPrices.push({
+          ...tier,
+          _packId: tier.pack ?? tier.package_id ?? tier.packageId ?? parentPackId,
+          _productPackageId: tier.product_package_id ?? tier.productPackageId ?? parentProductPackageId,
+        });
+      }
+    } else {
+      flatPrices.push({
+        ...item,
+        _packId: parentPackId,
+        _productPackageId: parentProductPackageId,
+      });
+    }
+  }
+
+  return flatPrices;
+};
+
 const update = async (data) => {
   const {
     id,
@@ -745,6 +885,7 @@ const update = async (data) => {
     description,
     complement,
     brand,
+    brandId,
     packageType,
     unitsPerPackage,
     unitOfMeasure,
@@ -761,40 +902,54 @@ const update = async (data) => {
     packages: packageList,
   } = data;
 
+  console.log(data);
+
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
+    const hasVariantPrices = await productVariantPricesTableExists(client);
+    const resolvedBrand = await resolveProductBrand(client, {
+      brand,
+      brandId: brandId ?? data.brand_id,
+      companyId,
+    });
+    const hasBrandId = await productsBrandIdColumnExists(client);
 
     // 1. Update core product row (content + master_package now included)
+    const productFields = [
+      ["sku", sku],
+      ["ean", ean],
+      ["name", name],
+      ["description", description],
+      ["complement", complement],
+      ["brand", resolvedBrand.brand],
+      ["package_type", packageType],
+      ["units_per_package", unitsPerPackage],
+      ["unit_of_measure", unitOfMeasure],
+      ["weight", weight],
+      ["active", active],
+      ["visibility", visibility],
+      ["deleted_at", deletedAt],
+      ["category_id", categoryId],
+      ["company_id", companyId],
+      ["content", content],
+      ["master_package", masterPackage],
+    ];
+    if (hasBrandId) {
+      productFields.push(["brand_id", resolvedBrand.brandId]);
+    }
+
+    const productValues = productFields.map(([, value]) => value);
+    productValues.push(id);
+
     const { rows: productRows } = await client.query(
       `UPDATE products
-       SET sku = $1, ean = $2, name = $3, description = $4, complement = $5, brand = $6,
-           package_type = $7, units_per_package = $8, unit_of_measure = $9, weight = $10,
-           active = $11, visibility = $12, updated_at = NOW(), deleted_at = $13,
-           category_id = $14, company_id = $15, content = $16, master_package = $17
-       WHERE id = $18
+       SET ${productFields.map(([column], index) => `${column} = $${index + 1}`).join(", ")},
+           updated_at = NOW()
+       WHERE id = $${productValues.length}
        RETURNING *`,
-      [
-        sku,
-        ean,
-        name,
-        description,
-        complement,
-        brand,
-        packageType,
-        unitsPerPackage,
-        unitOfMeasure,
-        weight,
-        active,
-        visibility,
-        deletedAt,
-        categoryId,
-        companyId,
-        content,
-        masterPackage,
-        id,
-      ],
+      productValues,
     );
     const product = productRows[0];
 
@@ -835,6 +990,16 @@ const update = async (data) => {
       // Delete packages removed by the user (delete their prices first for FK safety)
       for (const [pkgId, pkgRowId] of existingPkgMap) {
         if (!sentPackageIds.has(pkgId)) {
+          if (hasVariantPrices) {
+            console.log("deletando as variações");
+            await client.query(
+              `DELETE FROM product_variant_prices
+               WHERE product_price_id IN (
+                 SELECT id FROM products_prices WHERE product_package_id = $1
+               )`,
+              [pkgRowId],
+            );
+          }
           await client.query(`DELETE FROM products_prices WHERE product_package_id = $1`, [pkgRowId]);
           await client.query(`DELETE FROM products_packages WHERE id = $1`, [pkgRowId]);
         }
@@ -842,14 +1007,25 @@ const update = async (data) => {
     }
 
     // 4. Prices — upsert by id presence, delete removed ones, then sync variants
-    if (Array.isArray(packagePriceTiers) && packagePriceTiers.length > 0) {
+    if (Array.isArray(packagePriceTiers)) {
       // Snapshot existing prices before any modification
-      const { rows: existingPrices } = await client.query(`SELECT id, unit_price FROM products_prices WHERE product_id = $1`, [id]);
-      const existingPriceMap = new Map(existingPrices.map((p) => [p.id, Number(p.unit_price)]));
+      const { rows: existingPrices } = await client.query(`SELECT id, unit_price, product_package_id FROM products_prices WHERE product_id = $1`, [
+        id,
+      ]);
+      const existingPriceMap = new Map(
+        existingPrices.map((p) => [
+          p.id,
+          {
+            unitPrice: Number(p.unit_price),
+            productPackageId: p.product_package_id,
+          },
+        ]),
+      );
 
       const sentPriceIds = new Set();
       const newPrices = []; // { id, unitPrice } — newly inserted
       const changedPrices = []; // { id, unitPrice } — unit_price changed
+      const removedPriceIds = [];
 
       console.log("[PRODUCT PRICES DB RESULT]", JSON.stringify(existingPrices));
       console.log("[PRODUCT PRICES SAVE PAYLOAD]", JSON.stringify(packagePriceTiers));
@@ -857,31 +1033,39 @@ const update = async (data) => {
       // Normalize: Flutter sends either a flat list (PriceTier[]) where each entry has
       // qty_min at the top level, or a hierarchical list (PackagePriceTier[]) where each
       // entry has a nested `prices` array. Flatten to a uniform format.
-      const flatPrices = [];
-      for (const item of packagePriceTiers) {
-        const packId = String(item.pack ?? item.package_id ?? "");
-        if (Array.isArray(item.prices)) {
-          // Hierarchical (PackagePriceTier)
-          for (const tier of item.prices) {
-            flatPrices.push({ ...tier, _packId: packId });
-          }
-        } else {
-          // Flat (PriceTier) — pack is the package_id
-          flatPrices.push({ ...item, _packId: packId });
-        }
-      }
+      const flatPrices = flattenPriceTiers(packagePriceTiers);
 
       for (const price of flatPrices) {
-        const packId = price._packId;
-        let productPackageId = packageMap.get(packId);
+        const packId = price._packId != null ? String(price._packId) : "";
+        const priceId = toIntegerOrNull(price.id ?? price.price_id ?? price.product_price_id ?? price.productPriceId);
+        let productPackageId = packId ? packageMap.get(packId) : null;
+        if (!productPackageId && priceId && existingPriceMap.has(priceId)) {
+          productPackageId = existingPriceMap.get(priceId).productPackageId;
+        }
         if (!productPackageId) {
-          const { rows } = await client.query(`SELECT id FROM products_packages WHERE product_id = $1 AND package_id = $2 LIMIT 1`, [
-            id,
-            parseInt(packId),
-          ]);
-          if (rows.length > 0) {
-            productPackageId = rows[0].id;
-            packageMap.set(packId, productPackageId);
+          const productPackageIdFromPayload = toIntegerOrNull(price._productPackageId);
+          if (productPackageIdFromPayload) {
+            const { rows } = await client.query(`SELECT id, package_id FROM products_packages WHERE id = $1 AND product_id = $2 LIMIT 1`, [
+              productPackageIdFromPayload,
+              id,
+            ]);
+            if (rows.length > 0) {
+              productPackageId = rows[0].id;
+              packageMap.set(String(rows[0].package_id), productPackageId);
+            }
+          }
+        }
+        if (!productPackageId && packId) {
+          const packageId = toIntegerOrNull(packId);
+          if (packageId) {
+            const { rows } = await client.query(`SELECT id FROM products_packages WHERE product_id = $1 AND package_id = $2 LIMIT 1`, [
+              id,
+              packageId,
+            ]);
+            if (rows.length > 0) {
+              productPackageId = rows[0].id;
+              packageMap.set(packId, productPackageId);
+            }
           }
         }
         if (!productPackageId) {
@@ -889,14 +1073,14 @@ const update = async (data) => {
           continue;
         }
 
-        const qtyMin = price.qty_min ?? price.minQty ?? 1;
-        const qtyMax = price.qty_max ?? price.maxQty ?? null;
-        const unitPrice = Number(Number(price.unit_price ?? price.priceCents ?? 0).toFixed(2));
-        const priceId = price.id;
+        const qtyMin = toIntegerOrNull(price.qty_min ?? price.min_qty ?? price.minQty) ?? 1;
+        const qtyMax = toIntegerOrNull(price.qty_max ?? price.max_qty ?? price.maxQty);
+        const rawUnitPrice = price.unit_price ?? price.price ?? price.price_cents ?? price.priceCents ?? 0;
+        const unitPrice = Number(Number(rawUnitPrice).toFixed(2));
 
         if (priceId && existingPriceMap.has(priceId)) {
           sentPriceIds.add(priceId);
-          const oldUnitPrice = existingPriceMap.get(priceId);
+          const oldUnitPrice = existingPriceMap.get(priceId).unitPrice;
           await client.query(
             `UPDATE products_prices SET qty_min = $1, qty_max = $2, unit_price = $3,
              product_package_id = $4 WHERE id = $5`,
@@ -920,20 +1104,16 @@ const update = async (data) => {
       // Delete prices not in the sent payload
       for (const existingPriceId of existingPriceMap.keys()) {
         if (!sentPriceIds.has(existingPriceId)) {
-          await client.query(`DELETE FROM products_prices WHERE id = $1`, [existingPriceId]);
+          removedPriceIds.push(existingPriceId);
         }
       }
 
       // 5. Variant sync (only if product_variant_prices table exists)
-      const { rows: tableCheck } = await pool.query(
-        `SELECT 1 FROM information_schema.tables
-         WHERE table_schema = 'public' AND table_name = 'product_variant_prices' LIMIT 1`,
-      );
-      console.log(`Passando por aqui -------------------------------------- ${tableCheck.length}`);
-      if (tableCheck.length > 0) {
+      console.log(`Passando por aqui -------------------------------------- ${hasVariantPrices ? 1 : 0}`);
+      if (hasVariantPrices) {
         // Propagate unit_price changes only to variants whose price still matches the old
         // product price — those are inherited prices; custom prices are left untouched.
-        console.log(`${changedPrices}`);
+        console.log(JSON.stringify(changedPrices));
         for (const { id: priceId, unitPrice, oldUnitPrice } of changedPrices) {
           console.log("------------------------------------");
           console.log(`Price ID ${priceId} changed from ${oldUnitPrice} to ${unitPrice}`);
@@ -959,6 +1139,14 @@ const update = async (data) => {
             }
           }
         }
+
+        if (removedPriceIds.length > 0) {
+          await client.query(`DELETE FROM product_variant_prices WHERE product_price_id = ANY($1::int[])`, [removedPriceIds]);
+        }
+      }
+
+      for (const removedPriceId of removedPriceIds) {
+        await client.query(`DELETE FROM products_prices WHERE id = $1`, [removedPriceId]);
       }
     }
 

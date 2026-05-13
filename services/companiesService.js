@@ -32,9 +32,29 @@ const findProvidersCity = async (company) => {
   return result.rows || null;
 };
 
-// update company
+// update company — dynamic: only updates fields present in the payload
 const update = async (company) => {
-  const result = await pool.query("update companies set nome_fantasia = $1 where id = $2 RETURNING *", [company.nome_fantasia, company.id]);
+  const fields = [];
+  const values = [];
+  let idx = 1;
+
+  if (company.nome_fantasia !== undefined) {
+    fields.push(`nome_fantasia = $${idx++}`);
+    values.push(company.nome_fantasia);
+  }
+  if (company.logo !== undefined) {
+    fields.push(`logo = $${idx++}`);
+    values.push(company.logo || null);
+  }
+  if (company.color !== undefined) {
+    fields.push(`color = $${idx++}`);
+    values.push(company.color.replace("#", "") || null);
+  }
+
+  if (fields.length === 0) throw new Error("Nenhum campo para atualizar");
+
+  values.push(company.id);
+  const result = await pool.query(`UPDATE companies SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`, values);
   return result.rows[0];
 };
 
