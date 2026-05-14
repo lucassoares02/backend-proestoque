@@ -37,7 +37,7 @@ const create = async (data) => {
     companyId, title, description,
     bannerImageUrl, thumbnailImageUrl,
     buttonText, buttonColor, backgroundColor,
-    targetUrl, targetType,
+    targetUrl, targetType, targetId,
     isActive, startAt, endAt, priority,
   } = data;
 
@@ -46,16 +46,16 @@ const create = async (data) => {
        (company_id, title, description,
         banner_image_url, thumbnail_image_url,
         button_text, button_color, background_color,
-        target_url, target_type,
+        target_url, target_type, target_id,
         is_active, start_at, end_at, priority,
         created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW(),NOW())
      RETURNING *`,
     [
       companyId, title, description ?? null,
       bannerImageUrl ?? null, thumbnailImageUrl ?? null,
       buttonText ?? null, buttonColor ?? "#FF6600", backgroundColor ?? "#FFFFFF",
-      targetUrl ?? null, targetType ?? "custom",
+      targetUrl ?? null, targetType ?? "none", targetId ?? null,
       isActive !== false, startAt ?? null, endAt ?? null, priority ?? 0,
     ],
   );
@@ -67,7 +67,7 @@ const update = async (data) => {
     id, companyId, title, description,
     bannerImageUrl, thumbnailImageUrl,
     buttonText, buttonColor, backgroundColor,
-    targetUrl, targetType,
+    targetUrl, targetType, targetId,
     isActive, startAt, endAt, priority,
   } = data;
 
@@ -83,18 +83,19 @@ const update = async (data) => {
        background_color    = $8,
        target_url          = $9,
        target_type         = $10,
-       is_active           = $11,
-       start_at            = $12,
-       end_at              = $13,
-       priority            = $14,
+       target_id           = $11,
+       is_active           = $12,
+       start_at            = $13,
+       end_at              = $14,
+       priority            = $15,
        updated_at          = NOW()
-     WHERE id = $15
+     WHERE id = $16
      RETURNING *`,
     [
       companyId, title, description ?? null,
       bannerImageUrl ?? null, thumbnailImageUrl ?? null,
       buttonText ?? null, buttonColor ?? "#FF6600", backgroundColor ?? "#FFFFFF",
-      targetUrl ?? null, targetType ?? "custom",
+      targetUrl ?? null, targetType ?? "none", targetId ?? null,
       isActive !== false, startAt ?? null, endAt ?? null, priority ?? 0,
       id,
     ],
