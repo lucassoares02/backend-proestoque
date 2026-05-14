@@ -112,7 +112,8 @@ SELECT
     COALESCE(ptq.quantity, 0) AS quantity,
 
     COALESCE(imgs.images, '[]') AS images,
-    COALESCE(prs.prices, '[]') AS prices
+    COALESCE(prs.prices, '[]') AS prices,
+    COALESCE(pvc.variant_count, 0) AS variant_count
 
 FROM products p
 
@@ -182,6 +183,13 @@ LEFT JOIN (
     ) t
     GROUP BY t.product_id
 ) prs ON prs.product_id = p.id
+
+LEFT JOIN (
+    SELECT product_id, COUNT(*)::INTEGER AS variant_count
+    FROM product_variants
+    WHERE active = true
+    GROUP BY product_id
+) pvc ON pvc.product_id = p.id
 
 WHERE
     p.company_id = $1
@@ -572,28 +580,40 @@ LEFT JOIN (
     GROUP BY product_id
 ) imgs ON imgs.product_id = p.id
 
--- VARIANTES
+-- VARIANTES (com preços próprios por faixa)
 LEFT JOIN (
     SELECT
-        product_id,
+        pv.product_id,
         json_agg(
             json_build_object(
-                'id',         id,
-                'name',       name,
-                'sku',        sku,
-                'ean',        ean,
-                'weight',     weight,
-                'content',    content,
-                'price',      price,
-                'image_url',  image_url,
-                'active',     active,
-                'sort_order', sort_order
+                'id',         pv.id,
+                'name',       pv.name,
+                'sku',        pv.sku,
+                'ean',        pv.ean,
+                'weight',     pv.weight,
+                'content',    pv.content,
+                'price',      pv.price,
+                'image_url',  pv.image_url,
+                'active',     pv.active,
+                'sort_order', pv.sort_order,
+                'prices',     COALESCE(vprices.price_list, '[]')
             )
-            ORDER BY sort_order, id
+            ORDER BY pv.sort_order, pv.id
         ) AS variants
-    FROM product_variants
-    WHERE active = true
-    GROUP BY product_id
+    FROM product_variants pv
+    LEFT JOIN (
+        SELECT variant_id,
+          json_agg(json_build_object(
+            'id',               id,
+            'product_price_id', product_price_id,
+            'unit_price',       unit_price,
+            'is_overridden',    is_overridden
+          ) ORDER BY product_price_id) AS price_list
+        FROM product_variant_prices
+        GROUP BY variant_id
+    ) vprices ON vprices.variant_id = pv.id
+    WHERE pv.active = true
+    GROUP BY pv.product_id
 ) pvs ON pvs.product_id = p.id
 
 -- PREÇOS AGRUPADOS POR PACKAGE + QUANTITY

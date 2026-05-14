@@ -28,6 +28,8 @@ const paymentSettings = require("../controllers/paymentSettingsController");
 const checkoutPayment = require("../controllers/checkoutPaymentController");
 const productVariants = require("../controllers/productVariantsController");
 const orderAttachments = require("../controllers/orderAttachmentsController");
+const productsImport = require("../controllers/productsImportController");
+const campaigns = require("../controllers/campaignsController");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -62,6 +64,9 @@ router.get("/products/company/:supplier/:company/:category", products.findAll);
 router.post("/products", products.create);
 router.patch("/products", products.update);
 router.delete("/products/:id", products.remove);
+
+//product import (bulk)
+router.post("/products/import", productsImport.importBatch);
 
 //product variants — declaradas antes da wildcard /:id/:client para evitar conflito de rota
 router.get("/products/:id/variants", productVariants.findAll);
@@ -189,5 +194,17 @@ router.get ("/payment-settings/:supplier/customers",                  paymentSet
 router.get ("/payment-settings/:supplier/customers/:customer",        paymentSettings.getCustomer);
 router.put ("/payment-settings/:supplier/customers/:customer",        paymentSettings.putCustomer);
 router.delete("/payment-settings/:supplier/customers/:customer",      paymentSettings.deleteCustomer);
+
+//campaigns
+router.get("/campaigns/company/:companyId",        campaigns.findAll);
+router.get("/campaigns/active/:companyId",         campaigns.findActive);
+router.get("/campaigns/:id/metrics",               campaigns.getMetrics);
+router.post("/campaigns/:id/view",                 campaigns.registerView);
+router.post("/campaigns/:id/click",                campaigns.registerClick);
+router.patch("/campaigns/:id/toggle",              campaigns.toggle);
+router.get("/campaigns/:id",                       campaigns.find);
+router.post("/campaigns",                          campaigns.create);
+router.put("/campaigns/:id",                       campaigns.update);
+router.delete("/campaigns/:id",                    campaigns.remove);
 
 module.exports = router;
