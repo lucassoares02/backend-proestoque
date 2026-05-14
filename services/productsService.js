@@ -44,6 +44,34 @@ const resolveProductBrand = async (client, { brand, brandId, companyId }) => {
   };
 };
 
+const buildProductBrandSql = (hasBrandId) => {
+  if (!hasBrandId) {
+    return {
+      select: "NULL::json AS brand_details",
+      join: "",
+    };
+  }
+
+  return {
+    select: `
+    CASE
+      WHEN br.id IS NULL THEN NULL
+      ELSE json_build_object(
+        'id', br.id,
+        'name', br.name,
+        'description', br.description,
+        'icon_url', br.icon_url,
+        'icon', br.icon_url,
+        'logo_url', br.logo,
+        'logo', br.logo,
+        'brand_color', br.color,
+        'color', br.color
+      )
+    END AS brand_details`,
+    join: "LEFT JOIN brands br ON br.id = p.brand_id",
+  };
+};
+
 /**
  * Get All Products*/
 const findAll = async (supplier, company, category) => {
@@ -165,6 +193,7 @@ ORDER BY p.active DESC, p.id;`;
     return result.rows;
   } else {
     console.log("Lista de produtos para Clientes");
+    const brandSql = buildProductBrandSql(await productsBrandIdColumnExists(pool));
     const query = `
     WITH client_draft_items AS (
     -- 🔹 Quantidade do cliente por produto + pack
@@ -182,6 +211,7 @@ ORDER BY p.active DESC, p.id;`;
 
 SELECT
     p.*,
+    ${brandSql.select},
 
     -- 🔹 quantidade total do produto no draft (soma de todos os packs)
     COALESCE(oi.quantity, 0) AS quantity,
@@ -191,6 +221,8 @@ SELECT
     COALESCE(pvs.variants, '[]') AS variants
 
 FROM products p
+
+${brandSql.join}
 
 -- 🔹 quantidade total do produto (independente do pack)
 LEFT JOIN (
@@ -331,6 +363,7 @@ const find = async (id, client) => {
   console.log("Finding product with ID:", id);
 
   if (client != null && client != "null") {
+    const brandSql = buildProductBrandSql(await productsBrandIdColumnExists(pool));
     const result = await pool.query(
       `WITH client_draft_items AS (
         -- 🔹 Busca isolada do que o cliente tem no carrinho por pacote
@@ -347,11 +380,14 @@ const find = async (id, client) => {
 
     SELECT
         p.*,
+        ${brandSql.select},
         COALESCE(imgs.images, '[]') AS images,
         COALESCE(prs.prices, '[]') AS prices,
         COALESCE(pps.packages, '[]') AS packages,
         COALESCE(pvs.variants, '[]') AS variants
     FROM products p
+
+    ${brandSql.join}
 
     -- IMAGENS
     LEFT JOIN (
@@ -494,6 +530,7 @@ const find = async (id, client) => {
     );
     return result.rows[0] || null;
   } else {
+    const brandSql = buildProductBrandSql(await productsBrandIdColumnExists(pool));
     const result = await pool.query(
       `
        WITH product_items_qty AS (
@@ -509,11 +546,14 @@ const find = async (id, client) => {
 
 SELECT
     p.*,
+    ${brandSql.select},
     COALESCE(imgs.images, '[]') AS images,
     COALESCE(prs.prices, '[]') AS prices,
     COALESCE(pps.packages, '[]') AS packages,
     COALESCE(pvs.variants, '[]') AS variants
 FROM products p
+
+${brandSql.join}
 
 -- IMAGENS
 LEFT JOIN (
