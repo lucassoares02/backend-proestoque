@@ -1,4 +1,5 @@
 const service = require("../services/supportTicketsService");
+const minio = require("./minioController");
 
 const _err = (res, e, code = 500) =>
   res.status(code).json({ success: false, data: null, error: e.message || String(e) });
@@ -55,14 +56,27 @@ const customerSendMessage = async (req, res) => {
   try {
     const uuid = req.params.uuid;
     const { company_id, customer_id, message } = req.body;
-    if (!company_id || !uuid || !message) {
-      return _err(res, new Error("company_id, uuid e message são obrigatórios"), 400);
+    if (!company_id || !uuid) {
+      return _err(res, new Error("company_id e uuid são obrigatórios"), 400);
+    }
+    let attachments = null;
+    const file = service.validateAttachment(req.file);
+    if (file) {
+      const fileName = `proestoque/support/${uuid}/${Date.now()}_${file.originalName}`;
+      const { url } = await minio.uploadFile(file.buffer, fileName, file.mime);
+      attachments = [{
+        url,
+        type: file.mime,
+        name: file.originalName,
+        size: file.size,
+      }];
     }
     const data = await service.addMessage({
       uuid,
       senderType: 'CUSTOMER',
       senderUserId: customer_id || null,
       message,
+      attachments,
       scope: { role: 'customer', id: parseInt(company_id) },
     });
     return res.json({ success: true, data, error: null });
@@ -133,14 +147,27 @@ const supplierSendMessage = async (req, res) => {
   try {
     const uuid = req.params.uuid;
     const { supplier_id, sender_user_id, message } = req.body;
-    if (!supplier_id || !uuid || !message) {
-      return _err(res, new Error("supplier_id, uuid e message são obrigatórios"), 400);
+    if (!supplier_id || !uuid) {
+      return _err(res, new Error("supplier_id e uuid são obrigatórios"), 400);
+    }
+    let attachments = null;
+    const file = service.validateAttachment(req.file);
+    if (file) {
+      const fileName = `proestoque/support/${uuid}/${Date.now()}_${file.originalName}`;
+      const { url } = await minio.uploadFile(file.buffer, fileName, file.mime);
+      attachments = [{
+        url,
+        type: file.mime,
+        name: file.originalName,
+        size: file.size,
+      }];
     }
     const data = await service.addMessage({
       uuid,
       senderType: 'SUPPLIER',
       senderUserId: sender_user_id || null,
       message,
+      attachments,
       scope: { role: 'supplier', id: parseInt(supplier_id) },
     });
     return res.json({ success: true, data, error: null });

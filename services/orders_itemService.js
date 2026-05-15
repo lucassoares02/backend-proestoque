@@ -36,11 +36,39 @@ const create = async (data) => {
     // 🔒 Lock lógico por company + supplier
     await client.query(`SELECT pg_advisory_xact_lock($1, $2)`, [company_id, supplier_id]);
 
-    let finalOrderId = order_id;
     const parsedQuantity = Number(quantity);
+    let finalOrderId = order_id ? Number(order_id) : null;
+
+    if (finalOrderId) {
+      const currentDraft = await client.query(
+        `
+        SELECT id
+        FROM orders
+        WHERE id = $1
+          AND company_id = $2
+          AND supplier_id = $3
+          AND status = 'DRAFT'
+        LIMIT 1
+        `,
+        [finalOrderId, company_id, supplier_id],
+      );
+
+      if (!currentDraft.rows.length) {
+        finalOrderId = null;
+      }
+    }
 
     // 🔹 Busca ou cria pedido DRAFT
     if (!finalOrderId) {
+      if (parsedQuantity === 0) {
+        await client.query("COMMIT");
+        return {
+          order_id: order_id ? Number(order_id) : null,
+          remaining_items: 0,
+          order_removed: true,
+        };
+      }
+
       const draft = await client.query(
         `
         SELECT id
@@ -139,24 +167,53 @@ const create = async (data) => {
       }
     }
 
-    // 🔹 Recalcula total do pedido
-    await client.query(
+    const remainingItems = await client.query(
       `
-      UPDATE orders
-      SET total_value = (
-        SELECT COALESCE(SUM(total_price), 0)
-        FROM order_items
-        WHERE order_id = $1
-      ),
-      updated_at = NOW()
-      WHERE id = $1
+      SELECT COUNT(*)::int AS count
+      FROM order_items
+      WHERE order_id = $1
       `,
       [finalOrderId],
     );
+    const remainingItemCount = remainingItems.rows[0]?.count ?? 0;
+    let orderRemoved = false;
+
+    if (parsedQuantity === 0 && remainingItemCount === 0) {
+      await client.query(
+        `
+        DELETE FROM orders
+        WHERE id = $1
+          AND status = 'DRAFT'
+        `,
+        [finalOrderId],
+      );
+      orderRemoved = true;
+    }
+
+    // 🔹 Recalcula total do pedido
+    if (!orderRemoved) {
+      await client.query(
+        `
+        UPDATE orders
+        SET total_value = (
+          SELECT COALESCE(SUM(total_price), 0)
+          FROM order_items
+          WHERE order_id = $1
+        ),
+        updated_at = NOW()
+        WHERE id = $1
+        `,
+        [finalOrderId],
+      );
+    }
 
     await client.query("COMMIT");
 
-    return { order_id: finalOrderId };
+    return {
+      order_id: finalOrderId,
+      remaining_items: remainingItemCount,
+      order_removed: orderRemoved,
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("ERRO CREATE ORDER ITEM:", error);

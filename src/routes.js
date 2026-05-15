@@ -30,6 +30,8 @@ const productVariants = require("../controllers/productVariantsController");
 const orderAttachments = require("../controllers/orderAttachmentsController");
 const productsImport = require("../controllers/productsImportController");
 const campaigns = require("../controllers/campaignsController");
+const productSales = require("../controllers/productSalesController");
+const stories = require("../controllers/storyController");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -77,6 +79,7 @@ router.post("/products/:id/sync-variant-prices", productVariants.syncVariantPric
 router.put("/products/:id/variants/:variantId", productVariants.update);
 router.delete("/products/:id/variants/:variantId", productVariants.remove);
 
+router.get("/products/:id/sales-history", productSales.getSalesHistory);
 router.get("/products/:id/:client", products.find);
 
 //categories
@@ -172,14 +175,14 @@ router.get("/buyer/dashboard/:company", buyerDashboard.getDashboard);
 router.post("/support/tickets",                             support.createTicket);
 router.get ("/support/tickets/:company",                    support.listByCustomer);
 router.get ("/support/tickets/:company/:uuid",              support.findByCustomer);
-router.post("/support/tickets/:uuid/messages",              support.customerSendMessage);
+router.post("/support/tickets/:uuid/messages",              upload.single("file"), support.customerSendMessage);
 router.post("/support/tickets/:uuid/close",                 support.customerClose);
 router.post("/support/tickets/:uuid/reopen",                support.customerReopen);
 
 //support tickets — fornecedor
 router.get ("/supplier/support/tickets/:supplier",          support.listBySupplier);
 router.get ("/supplier/support/tickets/:supplier/:uuid",    support.findBySupplier);
-router.post("/supplier/support/tickets/:uuid/messages",     support.supplierSendMessage);
+router.post("/supplier/support/tickets/:uuid/messages",     upload.single("file"), support.supplierSendMessage);
 router.post("/supplier/support/tickets/:uuid/close",        support.supplierClose);
 
 //checkout payment options
@@ -206,5 +209,20 @@ router.get("/campaigns/:id",                       campaigns.find);
 router.post("/campaigns",                          campaigns.create);
 router.put("/campaigns/:id",                       campaigns.update);
 router.delete("/campaigns/:id",                    campaigns.remove);
+
+//stories
+router.get("/stories/supplier/:companyId",         stories.findAllBySupplier);
+router.get("/stories/active/:companyId",           stories.findActive);
+router.get("/stories/:id/metrics",                 stories.getMetrics);
+router.get("/stories/:id/comments",                stories.getComments);
+router.post("/stories/:id/view",                   stories.recordView);
+router.post("/stories/:id/click",                  stories.recordClick);
+router.post("/stories/:id/react",                  stories.recordReaction);
+router.post("/stories/:id/comment",                stories.addComment);
+router.patch("/stories/:id/toggle",                stories.toggle);
+router.get("/stories/:id",                         stories.find);
+router.post("/stories",                            stories.create);
+router.put("/stories/:id",                         stories.update);
+router.delete("/stories/:id",                      stories.remove);
 
 module.exports = router;

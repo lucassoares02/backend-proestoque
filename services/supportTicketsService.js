@@ -1,8 +1,12 @@
 const pool = require("../db");
+const path = require("path");
 
 const VALID_STATUS = ['OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'WAITING_SUPPLIER', 'CLOSED'];
 const VALID_PRIORITY = ['LOW', 'NORMAL', 'HIGH', 'URGENT'];
 const VALID_CATEGORIES = ['pedido', 'entrega', 'financeiro', 'produto', 'comercial', 'outro'];
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
+const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+const ALLOWED_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.pdf'];
 
 const _ticketSelect = `
   t.id, t.public_id AS uuid, t.company_id, t.supplier_id, t.customer_id,
@@ -136,8 +140,46 @@ const findTicket = async (uuid, scope) => {
   return ticket;
 };
 
-const addMessage = async ({ uuid, senderType, senderUserId, message, scope }) => {
-  if (!message || !message.toString().trim()) {
+const _bufferLooksValid = (buffer, ext) => {
+  if (!buffer || !buffer.length) return false;
+  const b = buffer;
+  if (ext === '.pdf') return b.length >= 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
+  if (ext === '.jpg' || ext === '.jpeg') return b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+  if (ext === '.png') return b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47;
+  if (ext === '.webp') return b.length >= 12
+    && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46
+    && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50;
+  return false;
+};
+
+const validateAttachment = (file) => {
+  if (!file) return null;
+  if (!file.buffer || !file.size || file.size <= 0) {
+    throw new Error("Arquivo inválido ou corrompido");
+  }
+  if (file.size > MAX_ATTACHMENT_BYTES) {
+    throw new Error("Arquivo muito grande (máx. 10 MB)");
+  }
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const mime = (file.mimetype || '').toLowerCase();
+  if (!ALLOWED_EXT.includes(ext) || !ALLOWED_MIME.includes(mime)) {
+    throw new Error("Tipo não permitido. Envie JPG, JPEG, PNG, WEBP ou PDF.");
+  }
+  if (!_bufferLooksValid(file.buffer, ext)) {
+    throw new Error("Arquivo inválido ou corrompido");
+  }
+  return {
+    ext,
+    mime,
+    originalName: file.originalname || `anexo${ext}`,
+    size: file.size,
+    buffer: file.buffer,
+  };
+};
+
+const addMessage = async ({ uuid, senderType, senderUserId, message, attachments = null, scope }) => {
+  const text = (message || '').toString().trim();
+  if (!text && (!attachments || !attachments.length)) {
     throw new Error("Mensagem vazia");
   }
   if (!['CUSTOMER', 'SUPPLIER'].includes(senderType)) {
@@ -166,9 +208,9 @@ const addMessage = async ({ uuid, senderType, senderUserId, message, scope }) =>
     }
 
     await client.query(
-      `INSERT INTO support_ticket_messages (ticket_id, sender_user_id, sender_type, message)
-       VALUES ($1, $2, $3, $4)`,
-      [ticket.id, senderUserId || null, senderType, message],
+      `INSERT INTO support_ticket_messages (ticket_id, sender_user_id, sender_type, message, attachments)
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [ticket.id, senderUserId || null, senderType, text, JSON.stringify(attachments || [])],
     );
 
     const newStatus = senderType === 'SUPPLIER' ? 'WAITING_CUSTOMER' : 'WAITING_SUPPLIER';
@@ -242,6 +284,7 @@ module.exports = {
   listBySupplier,
   findTicket,
   addMessage,
+  validateAttachment,
   closeTicket,
   reopenTicket,
 };

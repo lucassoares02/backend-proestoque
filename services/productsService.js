@@ -1,5 +1,14 @@
 const pool = require("../db");
 
+const sanitizeHtml = (html) => {
+  if (!html || typeof html !== "string") return null;
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
+    .replace(/javascript\s*:/gi, "")
+    .replace(/\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, "");
+};
+
 const parseIntegerOrNull = (value) => {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
@@ -715,6 +724,10 @@ const create = async (data) => {
     masterPackage,
     prices,
     packages,
+    stockQuantity,
+    minOrderQuantity,
+    maxOrderQuantity,
+    descriptionHtml,
   } = data;
 
   const client = await pool.connect();
@@ -745,8 +758,13 @@ const create = async (data) => {
       "company_id",
       "content",
       "master_package",
+      "stock_quantity",
+      "min_order_quantity",
+      "max_order_quantity",
+      "description_html",
     ];
-    const productValues = [sku, ean, name, description, complement, resolvedBrand.brand, packageType, unitsPerPackage, unitOfMeasure, weight, active, visibility, categoryId, companyId, content, masterPackage];
+    const productValues = [sku, ean, name, description, complement, resolvedBrand.brand, packageType, unitsPerPackage, unitOfMeasure, weight, active, visibility, categoryId, companyId, content, masterPackage,
+      parseIntegerOrNull(stockQuantity), parseIntegerOrNull(minOrderQuantity), parseIntegerOrNull(maxOrderQuantity), sanitizeHtml(descriptionHtml)];
 
     if (hasBrandId) {
       productColumns.push("brand_id");
@@ -960,6 +978,10 @@ const update = async (data) => {
     masterPackage,
     prices: packagePriceTiers,
     packages: packageList,
+    stockQuantity,
+    minOrderQuantity,
+    maxOrderQuantity,
+    descriptionHtml,
   } = data;
 
   console.log(data);
@@ -995,6 +1017,10 @@ const update = async (data) => {
       ["company_id", companyId],
       ["content", content],
       ["master_package", masterPackage],
+      ["stock_quantity", parseIntegerOrNull(stockQuantity)],
+      ["min_order_quantity", parseIntegerOrNull(minOrderQuantity)],
+      ["max_order_quantity", parseIntegerOrNull(maxOrderQuantity)],
+      ["description_html", sanitizeHtml(descriptionHtml)],
     ];
     if (hasBrandId) {
       productFields.push(["brand_id", resolvedBrand.brandId]);

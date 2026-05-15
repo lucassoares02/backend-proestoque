@@ -45,6 +45,14 @@ const review = async (req, res) => {
     if (e.message === "ORDER_ALREADY_REVIEWED") {
       return res.status(409).json({ success: false, data: null, error: "Order already reviewed" });
     }
+    if (e.message.startsWith("INSUFFICIENT_STOCK:")) {
+      const productName = e.message.split(":")[1];
+      return res.status(422).json({
+        success: false,
+        data: null,
+        error: `Estoque insuficiente para aprovação deste pedido (${productName})`,
+      });
+    }
     return res.status(500).json({ success: false, data: null, error: e.message });
   }
 };

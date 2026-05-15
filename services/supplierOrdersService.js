@@ -125,6 +125,64 @@ const review = async (uuid, supplierId, action, comment) => {
       throw new Error("ORDER_ALREADY_REVIEWED");
     }
 
+    if (action === "approve") {
+      // Busca itens do pedido com quantidade em estoque do produto
+      const itemsResult = await client.query(
+        `SELECT oi.id, oi.product_id, oi.variant_id, oi.quantity,
+                p.stock_quantity, p.name
+         FROM order_items oi
+         JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1`,
+        [order.id],
+      );
+      const items = itemsResult.rows;
+
+      // Valida estoque antes de qualquer alteração
+      for (const item of items) {
+        if (item.stock_quantity !== null && item.stock_quantity < item.quantity) {
+          throw new Error(`INSUFFICIENT_STOCK:${item.name}`);
+        }
+      }
+
+      // Verifica se a tabela stock_movements existe (criada por migration manual)
+      const tableCheck = await client.query(
+        `SELECT EXISTS (
+           SELECT FROM information_schema.tables
+           WHERE table_schema = 'public' AND table_name = 'stock_movements'
+         ) AS exists`,
+      );
+      const hasMovementsTable = tableCheck.rows[0].exists;
+
+      // Reduz estoque e registra movimentação para cada item com controle ativo
+      for (const item of items) {
+        if (item.stock_quantity !== null) {
+          const before = item.stock_quantity;
+          const after = before - item.quantity;
+
+          await client.query(
+            `UPDATE products SET stock_quantity = $1 WHERE id = $2`,
+            [after, item.product_id],
+          );
+
+          if (hasMovementsTable) {
+            await client.query(
+              `INSERT INTO stock_movements
+               (product_id, variant_id, order_id, quantity_before, quantity_changed, quantity_after, movement_type)
+               VALUES ($1, $2, $3, $4, $5, $6, 'sale')`,
+              [
+                item.product_id,
+                item.variant_id || null,
+                order.id,
+                before,
+                -item.quantity,
+                after,
+              ],
+            );
+          }
+        }
+      }
+    }
+
     const result = await client.query(
       `UPDATE orders
        SET status = $1, supplier_comment = $2, supplier_reviewed_at = NOW()
