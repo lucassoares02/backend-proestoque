@@ -1,5 +1,6 @@
 const pool = require("../db");
 const path = require("path");
+const notificationService = require("./notificationService");
 
 const VALID_STATUS = ['OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'WAITING_SUPPLIER', 'CLOSED'];
 const VALID_PRIORITY = ['LOW', 'NORMAL', 'HIGH', 'URGENT'];
@@ -222,6 +223,17 @@ const addMessage = async ({ uuid, senderType, senderUserId, message, attachments
     );
 
     await client.query("COMMIT");
+    const recipientCompanyId = senderType === "CUSTOMER" ? ticket.supplier_id : ticket.company_id;
+    const recipientUserType = senderType === "CUSTOMER" ? 2 : 1;
+    notificationService.createNotification({
+      companyId: recipientCompanyId,
+      userType: recipientUserType,
+      title: "Nova mensagem no suporte",
+      description: text.substring(0, 120) || "Você recebeu uma nova mensagem",
+      notificationType: "support",
+      entityType: "support_ticket",
+      entityUuid: uuid,
+    }).catch(() => {});
     return { ticket_id: ticket.id, status: newStatus };
   } catch (e) {
     await client.query("ROLLBACK");

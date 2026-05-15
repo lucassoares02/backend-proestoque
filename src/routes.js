@@ -32,6 +32,7 @@ const productsImport = require("../controllers/productsImportController");
 const campaigns = require("../controllers/campaignsController");
 const productSales = require("../controllers/productSalesController");
 const stories = require("../controllers/storyController");
+const notifications = require("../controllers/notificationController");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -211,18 +212,32 @@ router.put("/campaigns/:id",                       campaigns.update);
 router.delete("/campaigns/:id",                    campaigns.remove);
 
 //stories
-router.get("/stories/supplier/:companyId",         stories.findAllBySupplier);
-router.get("/stories/active/:companyId",           stories.findActive);
-router.get("/stories/:id/metrics",                 stories.getMetrics);
-router.get("/stories/:id/comments",                stories.getComments);
-router.post("/stories/:id/view",                   stories.recordView);
-router.post("/stories/:id/click",                  stories.recordClick);
-router.post("/stories/:id/react",                  stories.recordReaction);
-router.post("/stories/:id/comment",                stories.addComment);
-router.patch("/stories/:id/toggle",                stories.toggle);
-router.get("/stories/:id",                         stories.find);
-router.post("/stories",                            stories.create);
-router.put("/stories/:id",                         stories.update);
-router.delete("/stories/:id",                      stories.remove);
+router.get("/stories/supplier/:companyId",           stories.findAllBySupplier);
+router.get("/stories/active/:companyId",             stories.findActive);
+router.get("/stories/:id/metrics",                   stories.getMetrics);
+router.get("/stories/:id/comments",                  stories.getComments);
+router.get("/stories/:id/comments/supplier",         stories.getCommentsForSupplier);
+router.post("/stories/:id/view",                     stories.recordView);
+router.post("/stories/:id/click",                    stories.recordClick);
+router.post("/stories/:id/react",                    stories.recordReaction);
+router.post("/stories/:id/comment",                  stories.addComment);
+router.patch("/stories/:id/toggle",                  stories.toggle);
+router.patch("/stories/comments/:commentId/hide",    stories.hideComment);
+router.delete("/stories/comments/:commentId",        stories.deleteComment);
+router.post("/stories/:id/media-items",              stories.addMediaItem);
+router.patch("/stories/:id/media-items/reorder",     stories.reorderMediaItems);
+router.delete("/stories/media-items/:itemId",        stories.removeMediaItem);
+router.get("/stories/:id",                           stories.find);
+router.post("/stories",                              stories.create);
+router.put("/stories/:id",                           stories.update);
+router.delete("/stories/:id",                        stories.remove);
+
+//notifications
+router.get("/notifications",                        notifications.list);
+router.get("/notifications/unread-count",           notifications.unreadCount);
+router.patch("/notifications/read-all",             notifications.markAllRead);
+router.patch("/notifications/:id/read",             notifications.markRead);
+router.post("/notifications/clear-read",            notifications.clearRead);
+router.delete("/notifications/:id",                 notifications.remove);
 
 module.exports = router;

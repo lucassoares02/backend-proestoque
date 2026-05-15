@@ -1,4 +1,5 @@
 const pool = require("../db");
+const notificationService = require("./notificationService");
 
 const findAll = async (supplierId, statusFilter) => {
   let statusClause;
@@ -192,7 +193,21 @@ const review = async (uuid, supplierId, action, comment) => {
     );
 
     await client.query("COMMIT");
-    return result.rows[0];
+    const reviewedOrder = result.rows[0];
+    const statusLabel = newStatus === "APPROVED" ? "aprovado" : "reprovado";
+    notificationService.createNotification({
+      companyId: reviewedOrder.company_id,
+      userType: 1,
+      title: `Pedido ${statusLabel}`,
+      description: comment
+        ? `O fornecedor ${statusLabel} seu pedido: "${comment.substring(0, 100)}"`
+        : `O fornecedor ${statusLabel} seu pedido`,
+      notificationType: "order",
+      entityType: "order",
+      entityId: reviewedOrder.id,
+      entityUuid: uuid,
+    }).catch(() => {});
+    return reviewedOrder;
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
