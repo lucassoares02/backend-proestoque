@@ -32,11 +32,17 @@ const review = async (req, res) => {
   try {
     const supplierId = parseInt(req.params.supplier);
     const { uuid } = req.params;
-    const { action, comment } = req.body;
+    const { action, comment, approved_by_user_id } = req.body;
     if (!["approve", "reject"].includes(action)) {
       return res.status(400).json({ success: false, data: null, error: "action must be approve or reject" });
     }
-    const data = await supplierOrdersService.review(uuid, supplierId, action, comment);
+    const data = await supplierOrdersService.review(
+      uuid,
+      supplierId,
+      action,
+      comment,
+      approved_by_user_id ? parseInt(approved_by_user_id) : null,
+    );
     return res.json({ success: true, data, error: null });
   } catch (e) {
     if (e.message === "ORDER_NOT_FOUND") {
@@ -57,4 +63,36 @@ const review = async (req, res) => {
   }
 };
 
-module.exports = { findAll, find, review };
+const removeItem = async (req, res) => {
+  try {
+    const supplierId = parseInt(req.params.supplier);
+    const { uuid, itemId } = req.params;
+    const { reason, removed_by_user_id } = req.body;
+
+    if (!supplierId || !uuid || !itemId) {
+      return res.status(400).json({ success: false, data: null, error: "supplierId, uuid e itemId são obrigatórios" });
+    }
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ success: false, data: null, error: "Motivo da remoção é obrigatório" });
+    }
+
+    const data = await supplierOrdersService.removeItem(
+      uuid,
+      supplierId,
+      parseInt(itemId),
+      reason.trim(),
+      removed_by_user_id ? parseInt(removed_by_user_id) : null,
+    );
+    return res.json({ success: true, data, error: null });
+  } catch (e) {
+    if (e.message === "ORDER_NOT_FOUND") {
+      return res.status(404).json({ success: false, data: null, error: "Pedido não encontrado" });
+    }
+    if (e.message === "ITEM_NOT_FOUND") {
+      return res.status(404).json({ success: false, data: null, error: "Item não encontrado ou já removido" });
+    }
+    return res.status(500).json({ success: false, data: null, error: e.message });
+  }
+};
+
+module.exports = { findAll, find, review, removeItem };

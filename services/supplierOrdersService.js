@@ -64,6 +64,9 @@ const find = async (uuid, supplierId) => {
        c.cep             AS company_cep,
        -- delivery route
        r.name            AS route_name,
+       -- creator / approver
+       u_creator.name    AS created_by_user_name,
+       u_approver.name   AS approved_by_user_name,
        -- items
        COALESCE(
          json_agg(
@@ -79,7 +82,17 @@ const find = async (uuid, supplierId) => {
              'brand',            p.brand,
              'package_type',     p.package_type,
              'units_per_package',p.units_per_package,
-             'image',            pi.image_url
+             -- variant info (Part 1)
+             'variant_id',       oi.variant_id,
+             'variant_name',     pv.name,
+             'variant_sku',      pv.sku,
+             'variant_ean',      pv.ean,
+             -- image: prefer variant image, fall back to product image
+             'image',            COALESCE(pv.image_url, pi.image_url),
+             -- removal info (Part 2)
+             'is_removed',       COALESCE(oi.is_removed, false),
+             'removed_reason',   oi.removed_reason,
+             'removed_at',       oi.removed_at
            )
            ORDER BY oi.id
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -87,28 +100,32 @@ const find = async (uuid, supplierId) => {
        ) AS items,
        o.public_id AS uuid
      FROM orders o
-     LEFT JOIN companies c     ON c.id = o.company_id
-     LEFT JOIN routes r        ON r.id = o.route_date
-     LEFT JOIN order_items oi  ON oi.order_id = o.id
-     LEFT JOIN products p      ON p.id = oi.product_id
+     LEFT JOIN companies c        ON c.id = o.company_id
+     LEFT JOIN routes r           ON r.id = o.route_date
+     LEFT JOIN order_items oi     ON oi.order_id = o.id
+     LEFT JOIN products p         ON p.id = oi.product_id
+     LEFT JOIN product_variants pv ON pv.id = oi.variant_id
      LEFT JOIN LATERAL (
        SELECT url AS image_url FROM products_images
        WHERE product_id = p.id ORDER BY id ASC LIMIT 1
      ) pi ON TRUE
+     LEFT JOIN users u_creator    ON u_creator.id = o.created_by_user_id
+     LEFT JOIN users u_approver   ON u_approver.id = o.approved_by_user_id
      WHERE o.public_id = $1
        AND o.supplier_id = $2
      GROUP BY o.id,
               c.razao_social, c.nome_fantasia, c.cnpj, c.email,
               c.ddd_telefone1, c.logradouro, c.numero, c.complemento,
               c.bairro, c.municipio, c.uf, c.cep,
-              r.name`,
+              r.name,
+              u_creator.name, u_approver.name`,
     [uuid, supplierId],
   );
 
   return result.rows[0] || null;
 };
 
-const review = async (uuid, supplierId, action, comment) => {
+const review = async (uuid, supplierId, action, comment, approvedByUserId) => {
   const newStatus = action === "approve" ? "APPROVED" : "REJECTED";
   const client = await pool.connect();
   try {
@@ -127,25 +144,22 @@ const review = async (uuid, supplierId, action, comment) => {
     }
 
     if (action === "approve") {
-      // Busca itens do pedido com quantidade em estoque do produto
       const itemsResult = await client.query(
         `SELECT oi.id, oi.product_id, oi.variant_id, oi.quantity,
                 p.stock_quantity, p.name
          FROM order_items oi
          JOIN products p ON p.id = oi.product_id
-         WHERE oi.order_id = $1`,
+         WHERE oi.order_id = $1 AND COALESCE(oi.is_removed, false) = false`,
         [order.id],
       );
       const items = itemsResult.rows;
 
-      // Valida estoque antes de qualquer alteração
       for (const item of items) {
         if (item.stock_quantity !== null && item.stock_quantity < item.quantity) {
           throw new Error(`INSUFFICIENT_STOCK:${item.name}`);
         }
       }
 
-      // Verifica se a tabela stock_movements existe (criada por migration manual)
       const tableCheck = await client.query(
         `SELECT EXISTS (
            SELECT FROM information_schema.tables
@@ -154,7 +168,6 @@ const review = async (uuid, supplierId, action, comment) => {
       );
       const hasMovementsTable = tableCheck.rows[0].exists;
 
-      // Reduz estoque e registra movimentação para cada item com controle ativo
       for (const item of items) {
         if (item.stock_quantity !== null) {
           const before = item.stock_quantity;
@@ -186,10 +199,11 @@ const review = async (uuid, supplierId, action, comment) => {
 
     const result = await client.query(
       `UPDATE orders
-       SET status = $1, supplier_comment = $2, supplier_reviewed_at = NOW()
+       SET status = $1, supplier_comment = $2, supplier_reviewed_at = NOW(),
+           approved_by_user_id = $4
        WHERE id = $3
        RETURNING *`,
-      [newStatus, comment || null, order.id],
+      [newStatus, comment || null, order.id, approvedByUserId || null],
     );
 
     await client.query("COMMIT");
@@ -216,4 +230,55 @@ const review = async (uuid, supplierId, action, comment) => {
   }
 };
 
-module.exports = { findAll, find, review };
+const removeItem = async (uuid, supplierId, itemId, reason, removedByUserId) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Verify order belongs to this supplier
+    const orderCheck = await client.query(
+      `SELECT id FROM orders WHERE public_id = $1 AND supplier_id = $2 FOR UPDATE`,
+      [uuid, supplierId],
+    );
+    if (!orderCheck.rows.length) throw new Error("ORDER_NOT_FOUND");
+    const orderId = orderCheck.rows[0].id;
+
+    // Mark item as removed (only if not already removed)
+    const itemResult = await client.query(
+      `UPDATE order_items
+       SET is_removed = true,
+           removed_reason = $1,
+           removed_by = $2,
+           removed_at = NOW()
+       WHERE id = $3 AND order_id = $4 AND COALESCE(is_removed, false) = false
+       RETURNING id`,
+      [reason || null, removedByUserId || null, itemId, orderId],
+    );
+
+    if (!itemResult.rows.length) throw new Error("ITEM_NOT_FOUND");
+
+    // Recalculate order total using only active (non-removed) items
+    const totalResult = await client.query(
+      `SELECT COALESCE(SUM(total_price), 0) AS new_total
+       FROM order_items
+       WHERE order_id = $1 AND COALESCE(is_removed, false) = false`,
+      [orderId],
+    );
+    const newTotal = totalResult.rows[0].new_total;
+
+    await client.query(
+      `UPDATE orders SET total_value = $1, updated_at = NOW() WHERE id = $2`,
+      [newTotal, orderId],
+    );
+
+    await client.query("COMMIT");
+    return { newTotal };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+module.exports = { findAll, find, review, removeItem };

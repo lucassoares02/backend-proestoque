@@ -71,7 +71,7 @@ const create = async (req, res) => {
       }
     }
 
-    const newItem = await service.create(uuid, payment_method, delivery_date, comment, boleto_term);
+    const newItem = await service.create(uuid, payment_method, delivery_date, comment, boleto_term, req.body.created_by_user_id || null);
     return res.status(201).json({ success: true, data: newItem, error: null });
   } catch (error) {
     console.error("Error creating Orders:", error);

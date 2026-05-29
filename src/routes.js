@@ -33,6 +33,8 @@ const campaigns = require("../controllers/campaignsController");
 const productSales = require("../controllers/productSalesController");
 const stories = require("../controllers/storyController");
 const notifications = require("../controllers/notificationController");
+const cartTracking      = require("../controllers/cartTrackingController");
+const exchangeRequests  = require("../controllers/exchangeRequestsController");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -165,6 +167,7 @@ router.post("/cart/suggestions", cartSuggestions.getSuggestions);
 router.get("/supplier-orders/:supplier", supplierOrders.findAll);
 router.get("/supplier-orders/:supplier/:uuid", supplierOrders.find);
 router.post("/supplier-orders/:supplier/:uuid/review", supplierOrders.review);
+router.patch("/supplier-orders/:supplier/:uuid/items/:itemId/remove", supplierOrders.removeItem);
 
 //supplier dashboard
 router.get("/supplier/dashboard/:supplier", supplierDashboard.getDashboard);
@@ -239,5 +242,24 @@ router.patch("/notifications/read-all",             notifications.markAllRead);
 router.patch("/notifications/:id/read",             notifications.markRead);
 router.post("/notifications/clear-read",            notifications.clearRead);
 router.delete("/notifications/:id",                 notifications.remove);
+
+// CART TRACKING
+router.post("/cart-tracking/event",                        cartTracking.track);
+router.get("/cart-tracking/supplier/:supplierId/sessions", cartTracking.getSessions);
+router.get("/cart-tracking/supplier/:supplierId/metrics",  cartTracking.getMetrics);
+router.get("/cart-tracking/supplier/:supplierId/order/:orderId/timeline", cartTracking.getTimeline);
+router.get("/cart-tracking/supplier/:supplierId/order/:orderId/summary",  cartTracking.getSessionSummary);
+
+// EXCHANGE REQUESTS (Trocas / Devoluções)
+// comprador — listByBuyer antes de findByBuyer para evitar colisão com :uuid
+router.get  ("/exchange-requests",                         exchangeRequests.listByBuyer);
+router.post ("/exchange-requests",                         exchangeRequests.create);
+router.get  ("/exchange-requests/:uuid",                   exchangeRequests.findByBuyer);
+router.patch("/exchange-requests/:uuid/approve",           exchangeRequests.approve);
+router.patch("/exchange-requests/:uuid/reject",            exchangeRequests.reject);
+router.post ("/exchange-requests/:uuid/files", upload.single("file"), exchangeRequests.addFile);
+// fornecedor
+router.get  ("/supplier/exchange-requests",                exchangeRequests.listBySupplier);
+router.get  ("/supplier/exchange-requests/:uuid",          exchangeRequests.findBySupplier);
 
 module.exports = router;

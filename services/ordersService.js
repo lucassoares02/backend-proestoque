@@ -117,39 +117,50 @@ const find = async (uuid) => {
     SELECT
       o.*,
 
-      -- 🔹 dados do fornecedor
-      s.razao_social AS supplier_razao_social,
+      -- dados do fornecedor
+      s.razao_social  AS supplier_razao_social,
       s.nome_fantasia AS supplier_nome_fantasia,
-      s.logo AS supplier_logo,
-      s.color AS supplier_color,
+      s.logo          AS supplier_logo,
+      s.color         AS supplier_color,
 
-      -- 🔹 pedido mínimo do fornecedor
+      -- pedido mínimo do fornecedor
       ps.minimum_order_amount,
+
+      -- criador / aprovador (Part 5)
+      u_creator.name  AS created_by_user_name,
+      u_approver.name AS approved_by_user_name,
 
       COALESCE(
         json_agg(
           json_build_object(
-            'id', oi.id,
-            'order_id', oi.order_id,
-            'product_id', oi.product_id,
+            'id',               oi.id,
+            'order_id',         oi.order_id,
+            'product_id',       oi.product_id,
 
-            'quantity', oi.quantity,
-            'unit_price', oi.unit_price,
-            'total_price', oi.total_price,
+            'quantity',         oi.quantity,
+            'unit_price',       oi.unit_price,
+            'total_price',      oi.total_price,
 
-            -- 🔹 variação selecionada
-            'variant_id', oi.variant_id,
-            'variant_name', pv.name,
+            -- variação selecionada (Part 1)
+            'variant_id',       oi.variant_id,
+            'variant_name',     pv.name,
+            'variant_sku',      pv.sku,
+            'variant_ean',      pv.ean,
 
-            -- 🔹 dados do produto no mesmo nível
-            'name', p.name,
-            'complement', p.complement,
-            'brand', p.brand,
-            'package_type', p.package_type,
-            'units_per_package', p.units_per_package,
+            -- dados do produto
+            'name',             p.name,
+            'complement',       p.complement,
+            'brand',            p.brand,
+            'package_type',     p.package_type,
+            'units_per_package',p.units_per_package,
 
-            -- 🔹 imagem: prefere da variação, senão a do produto
-            'image', COALESCE(pv.image_url, pi.image_url)
+            -- imagem: prefere variação, depois produto
+            'image',            COALESCE(pv.image_url, pi.image_url),
+
+            -- remoção parcial (Part 2)
+            'is_removed',       COALESCE(oi.is_removed, false),
+            'removed_reason',   oi.removed_reason,
+            'removed_at',       oi.removed_at
           )
           ORDER BY oi.id
         ) FILTER (WHERE oi.id IS NOT NULL),
@@ -160,11 +171,9 @@ const find = async (uuid) => {
 
     FROM orders o
 
-    -- 🔹 fornecedor
     LEFT JOIN companies s
       ON s.id = o.supplier_id
 
-    -- 🔹 configurações de pagamento / pedido mínimo
     LEFT JOIN payment_settings ps
       ON ps.supplier_id = o.supplier_id
 
@@ -183,6 +192,9 @@ const find = async (uuid) => {
       LIMIT 1
     ) pi ON TRUE
 
+    LEFT JOIN users u_creator  ON u_creator.id  = o.created_by_user_id
+    LEFT JOIN users u_approver ON u_approver.id = o.approved_by_user_id
+
     WHERE o.public_id = $1
 
     GROUP BY
@@ -191,7 +203,9 @@ const find = async (uuid) => {
       s.nome_fantasia,
       s.logo,
       s.color,
-      ps.minimum_order_amount
+      ps.minimum_order_amount,
+      u_creator.name,
+      u_approver.name
 
     HAVING COUNT(oi.id) > 0
     `,
@@ -209,7 +223,7 @@ const _legacyPaymentInt = (method) => {
   return Number(method) || 0;
 };
 
-const create = async (uuid, payment_method, delivery_date, comment, boleto_term) => {
+const create = async (uuid, payment_method, delivery_date, comment, boleto_term, created_by_user_id) => {
   const legacyInt = typeof payment_method === "string" ? _legacyPaymentInt(payment_method) : payment_method;
   const methodStr = typeof payment_method === "string" ? payment_method : null;
 
@@ -220,10 +234,11 @@ const create = async (uuid, payment_method, delivery_date, comment, boleto_term)
          payment_method = $3,
          boleto_term = $4,
          date = $5,
-         notes = $6
+         notes = $6,
+         created_by_user_id = $7
      WHERE public_id = $1
      RETURNING *`,
-    [uuid, legacyInt, methodStr, boleto_term ?? null, delivery_date, comment],
+    [uuid, legacyInt, methodStr, boleto_term ?? null, delivery_date, comment, created_by_user_id ?? null],
   );
   return result.rows[0];
 };
