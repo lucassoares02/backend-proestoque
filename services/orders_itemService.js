@@ -22,10 +22,28 @@ const countOrdersItems = async (company) => {
 };
 
 const create = async (data) => {
-  const { order_id, company_id, supplier_id, product_id, quantity, unit_price, total_price, package_id, buy_together_campaign_id, buy_together_applied, variant_id } = data;
+  const {
+    order_id,
+    company_id,
+    supplier_id,
+    product_id,
+    quantity,
+    unit_price,
+    total_price,
+    package_id,
+    buy_together_campaign_id,
+    buy_together_applied,
+    variant_id,
+    is_bonus,
+    bonus_rule_id,
+  } = data;
+
+  // Itens bônus sempre têm preço zero — qualquer valor recebido é ignorado.
+  const finalUnitPrice = is_bonus ? 0 : unit_price;
+  const finalTotalPrice = is_bonus ? 0 : total_price;
 
   console.log("[ORDERS_ITEM CREATE] payload received:", {
-    order_id, company_id, supplier_id, product_id, package_id, variant_id, quantity,
+    order_id, company_id, supplier_id, product_id, package_id, variant_id, quantity, is_bonus,
   });
 
   const client = await pool.connect();
@@ -97,7 +115,8 @@ const create = async (data) => {
       }
     }
 
-    // 🔹 Remove item discriminando por package + variant (IS NOT DISTINCT FROM trata NULL = NULL)
+    // 🔹 Remove item discriminando por package + variant + is_bonus
+    //    Itens normais e itens bônus são distintos mesmo com mesmo produto/variação/pack.
     if (parsedQuantity === 0) {
       await client.query(
         `
@@ -106,13 +125,11 @@ const create = async (data) => {
           AND product_id = $2
           AND package_id IS NOT DISTINCT FROM $3
           AND variant_id IS NOT DISTINCT FROM $4
+          AND COALESCE(is_bonus, false) = $5
         `,
-        [finalOrderId, product_id, package_id ?? null, variant_id ?? null],
+        [finalOrderId, product_id, package_id ?? null, variant_id ?? null, is_bonus ?? false],
       );
     } else {
-      // 🔹 Upsert manual: tenta UPDATE primeiro (IS NOT DISTINCT FROM trata NULL = NULL),
-      //    se não existir item, faz INSERT. Não depende de unique constraint
-      //    com NULLS NOT DISTINCT, que só existe em PostgreSQL 15+.
       const updateRes = await client.query(
         `
         UPDATE order_items
@@ -121,11 +138,14 @@ const create = async (data) => {
             total_price = $6,
             buy_together_campaign_id = $7,
             buy_together_applied = $8,
+            is_bonus = $10,
+            bonus_rule_id = $11,
             updated_at = NOW()
         WHERE order_id = $1
           AND product_id = $2
           AND package_id IS NOT DISTINCT FROM $3
           AND variant_id IS NOT DISTINCT FROM $9
+          AND COALESCE(is_bonus, false) = $10
         RETURNING *
         `,
         [
@@ -133,11 +153,13 @@ const create = async (data) => {
           product_id,
           package_id ?? null,
           parsedQuantity,
-          unit_price,
-          total_price,
+          finalUnitPrice,
+          finalTotalPrice,
           buy_together_campaign_id ?? null,
           buy_together_applied ?? false,
           variant_id ?? null,
+          is_bonus ?? false,
+          bonus_rule_id ?? null,
         ],
       );
 
@@ -145,8 +167,9 @@ const create = async (data) => {
         const insertRes = await client.query(
           `
           INSERT INTO order_items
-            (order_id, product_id, package_id, quantity, unit_price, total_price, buy_together_campaign_id, buy_together_applied, variant_id)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            (order_id, product_id, package_id, quantity, unit_price, total_price,
+             buy_together_campaign_id, buy_together_applied, variant_id, is_bonus, bonus_rule_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
           RETURNING *
           `,
           [
@@ -154,11 +177,13 @@ const create = async (data) => {
             product_id,
             package_id ?? null,
             parsedQuantity,
-            unit_price,
-            total_price,
+            finalUnitPrice,
+            finalTotalPrice,
             buy_together_campaign_id ?? null,
             buy_together_applied ?? false,
             variant_id ?? null,
+            is_bonus ?? false,
+            bonus_rule_id ?? null,
           ],
         );
         if (!insertRes.rows.length) {

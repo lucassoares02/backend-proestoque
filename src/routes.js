@@ -19,6 +19,7 @@ const coupons = require("../controllers/couponsController");
 const files = require("../controllers/filesController");
 const brands = require("../controllers/brandsController");
 const buyTogether = require("../controllers/buyTogetherController");
+const bonusRules = require("../controllers/bonusRulesController");
 const cartSuggestions = require("../controllers/cartSuggestionsController");
 const supplierOrders = require("../controllers/supplierOrdersController");
 const supplierDashboard = require("../controllers/supplierDashboardController");
@@ -87,8 +88,11 @@ router.get("/products/:id/:client", products.find);
 
 //categories
 router.get("/categories", categories.findAll);
-router.get("/categories/:id", categories.find);
+// Rotas específicas ANTES de "/categories/:id" para não serem capturadas por ele.
+router.get("/categories/roots", categories.findRoots);
 router.get("/categories/supplier/:id", categories.findCategoriesSupplier);
+router.get("/categories/:id/subcategories", categories.findSubcategories);
+router.get("/categories/:id", categories.find);
 router.post("/categories", categories.create);
 router.patch("/categories/:id", categories.update);
 router.delete("/categories/:id", categories.remove);
@@ -160,6 +164,16 @@ router.post("/buy-together", buyTogether.create);
 router.patch("/buy-together/:id", buyTogether.update);
 router.delete("/buy-together/:id", buyTogether.remove);
 
+//bonus rules
+router.get("/bonus-rules/company/:company", bonusRules.findAll);
+router.get("/bonus-rules/products/:company", bonusRules.getProducts);
+router.get("/bonus-rules/active/:supplier", bonusRules.findActiveBySupplier);
+router.get("/bonus-rules/active/:supplier/product/:product", bonusRules.findActiveByProduct);
+router.get("/bonus-rules/:id", bonusRules.find);
+router.post("/bonus-rules", bonusRules.create);
+router.patch("/bonus-rules/:id", bonusRules.update);
+router.delete("/bonus-rules/:id", bonusRules.remove);
+
 //cart suggestions
 router.post("/cart/suggestions", cartSuggestions.getSuggestions);
 
@@ -176,7 +190,7 @@ router.get("/supplier/dashboard/:supplier", supplierDashboard.getDashboard);
 router.get("/buyer/dashboard/:company", buyerDashboard.getDashboard);
 
 //support tickets — cliente
-router.post("/support/tickets",                             support.createTicket);
+router.post("/support/tickets",                             upload.single("file"), support.createTicket);
 router.get ("/support/tickets/:company",                    support.listByCustomer);
 router.get ("/support/tickets/:company/:uuid",              support.findByCustomer);
 router.post("/support/tickets/:uuid/messages",              upload.single("file"), support.customerSendMessage);
@@ -188,6 +202,7 @@ router.get ("/supplier/support/tickets/:supplier",          support.listBySuppli
 router.get ("/supplier/support/tickets/:supplier/:uuid",    support.findBySupplier);
 router.post("/supplier/support/tickets/:uuid/messages",     upload.single("file"), support.supplierSendMessage);
 router.post("/supplier/support/tickets/:uuid/close",        support.supplierClose);
+router.patch("/supplier/support/tickets/:uuid/status",      support.supplierUpdateStatus);
 
 //checkout payment options
 router.get("/checkout/payment-options/:supplier/:company", checkoutPayment.paymentOptions);

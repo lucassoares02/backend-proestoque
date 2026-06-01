@@ -8,15 +8,40 @@ const _err = (res, e, code = 500) =>
 
 const createTicket = async (req, res) => {
   try {
-    const { company_id, supplier_id, customer_id, subject, category, priority, message } = req.body;
+    const {
+      company_id,
+      supplier_id,
+      customer_id,
+      order_id,
+      order_public_id,
+      subject,
+      category,
+      priority,
+      message,
+    } = req.body;
     if (!company_id || !supplier_id || !subject || !message) {
       return _err(res, new Error("company_id, supplier_id, subject e message são obrigatórios"), 400);
+    }
+    let attachments = null;
+    const file = service.validateAttachment(req.file);
+    if (file) {
+      const fileName = `proestoque/support/new/${Date.now()}_${file.originalName}`;
+      const { url } = await minio.uploadFile(file.buffer, fileName, file.mime);
+      attachments = [{
+        url,
+        type: file.mime,
+        name: file.originalName,
+        size: file.size,
+      }];
     }
     const data = await service.createTicket({
       companyId: parseInt(company_id),
       supplierId: parseInt(supplier_id),
       customerId: customer_id ? parseInt(customer_id) : null,
+      orderId: order_id ? parseInt(order_id) : null,
+      orderPublicId: order_public_id || null,
       subject, category, priority, message,
+      attachments,
     });
     return res.json({ success: true, data, error: null });
   } catch (e) {
@@ -32,6 +57,7 @@ const listByCustomer = async (req, res) => {
       status: req.query.status,
       priority: req.query.priority,
       search: req.query.search,
+      orderOnly: req.query.order_only,
     });
     return res.json({ success: true, data, error: null });
   } catch (e) {
@@ -123,6 +149,7 @@ const listBySupplier = async (req, res) => {
       status: req.query.status,
       priority: req.query.priority,
       search: req.query.search,
+      orderOnly: req.query.order_only,
     });
     return res.json({ success: true, data, error: null });
   } catch (e) {
@@ -190,6 +217,24 @@ const supplierClose = async (req, res) => {
   }
 };
 
+const supplierUpdateStatus = async (req, res) => {
+  try {
+    const uuid = req.params.uuid;
+    const { supplier_id, status } = req.body;
+    if (!supplier_id || !uuid || !status) {
+      return _err(res, new Error("supplier_id, uuid e status são obrigatórios"), 400);
+    }
+    const data = await service.updateStatus({
+      uuid,
+      supplierId: parseInt(supplier_id),
+      status,
+    });
+    return res.json({ success: true, data, error: null });
+  } catch (e) {
+    return _err(res, e, e.message === 'Ticket não encontrado' ? 404 : 400);
+  }
+};
+
 module.exports = {
   createTicket,
   listByCustomer,
@@ -201,4 +246,5 @@ module.exports = {
   findBySupplier,
   supplierSendMessage,
   supplierClose,
+  supplierUpdateStatus,
 };

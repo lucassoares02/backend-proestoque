@@ -92,7 +92,13 @@ const find = async (uuid, supplierId) => {
              -- removal info (Part 2)
              'is_removed',       COALESCE(oi.is_removed, false),
              'removed_reason',   oi.removed_reason,
-             'removed_at',       oi.removed_at
+             'removed_at',       oi.removed_at,
+             -- bonus info
+             'is_bonus',         COALESCE(oi.is_bonus, false),
+             'bonus_rule_id',    oi.bonus_rule_id,
+             'bonus_rule_name',  br.name,
+             'bonus_rule_description', br.description,
+             'bonus_original_unit_price', bpp.unit_price
            )
            ORDER BY oi.id
          ) FILTER (WHERE oi.id IS NOT NULL),
@@ -105,10 +111,16 @@ const find = async (uuid, supplierId) => {
      LEFT JOIN order_items oi     ON oi.order_id = o.id
      LEFT JOIN products p         ON p.id = oi.product_id
      LEFT JOIN product_variants pv ON pv.id = oi.variant_id
+     LEFT JOIN bonus_rules br     ON br.id = oi.bonus_rule_id
      LEFT JOIN LATERAL (
        SELECT url AS image_url FROM products_images
        WHERE product_id = p.id ORDER BY id ASC LIMIT 1
      ) pi ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT unit_price FROM products_prices
+       WHERE product_id = oi.product_id
+       ORDER BY qty_min ASC LIMIT 1
+     ) bpp ON oi.is_bonus = true
      LEFT JOIN users u_creator    ON u_creator.id = o.created_by_user_id
      LEFT JOIN users u_approver   ON u_approver.id = o.approved_by_user_id
      WHERE o.public_id = $1

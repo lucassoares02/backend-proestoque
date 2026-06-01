@@ -122,7 +122,16 @@ const findByUuid = async (uuid, scope) => {
 
   const items = await pool.query(
     `SELECT i.*, COALESCE(i.product_name, p.name) AS product_name,
-            pv.name AS variant_name, pv.sku AS variant_sku,
+            pv.name AS variant_name, pv.sku AS variant_sku, pv.ean AS variant_ean,
+            p.sku                AS product_sku,
+            p.brand              AS brand,
+            p.complement         AS complement,
+            p.description        AS product_description,
+            p.package_type       AS package_type,
+            p.unit_of_measure    AS unit_of_measure,
+            p.units_per_package  AS units_per_package,
+            p.content            AS content,
+            cat.name             AS category_name,
             COALESCE(pv.image_url, (
               SELECT pi.url FROM products_images pi WHERE pi.product_id = p.id
               ORDER BY pi.sort_order LIMIT 1
@@ -130,6 +139,7 @@ const findByUuid = async (uuid, scope) => {
      FROM exchange_request_items i
      LEFT JOIN products p        ON p.id  = i.product_id
      LEFT JOIN product_variants pv ON pv.id = i.variant_id
+     LEFT JOIN products_categories cat ON cat.id = p.category_id
      WHERE i.exchange_request_id = $1
      ORDER BY i.id ASC`,
     [row.id]

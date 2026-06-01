@@ -15,12 +15,30 @@ const parseIntegerOrNull = (value) => {
   return Number.isNaN(number) ? null : parseInt(number, 10);
 };
 
+// Mantém o valor como texto (preserva zeros à esquerda); vazio vira null.
+const parseStringOrNull = (value) => {
+  if (value === null || value === undefined) return null;
+  const str = String(value).trim();
+  return str === "" ? null : str;
+};
+
 const productsBrandIdColumnExists = async (client) => {
   const { rows } = await client.query(
     `SELECT 1 FROM information_schema.columns
      WHERE table_schema = 'public'
        AND table_name = 'products'
        AND column_name = 'brand_id'
+     LIMIT 1`,
+  );
+  return rows.length > 0;
+};
+
+const productsIndustryIdColumnExists = async (client) => {
+  const { rows } = await client.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'products'
+       AND column_name = 'industry_id'
      LIMIT 1`,
   );
   return rows.length > 0;
@@ -81,11 +99,58 @@ const buildProductBrandSql = (hasBrandId) => {
   };
 };
 
+const productsSubCategoryColumnExists = async (client) => {
+  const { rows } = await client.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'products'
+       AND column_name = 'sub_category_id'
+     LIMIT 1`,
+  );
+  return rows.length > 0;
+};
+
+/**
+ * SQL para categoria (sempre) + subcategoria (apenas se a coluna existir).
+ * Retorna json `category` e `sub_category` com id/name/slug/parent_id.
+ */
+const buildProductCategorySql = (hasSubCategory) => {
+  const categorySelect = `
+    CASE WHEN cat.id IS NULL THEN NULL
+      ELSE json_build_object('id', cat.id, 'name', cat.name, 'slug', cat.slug, 'parent_id', cat.parent_id)
+    END AS category`;
+  const categoryJoin = "LEFT JOIN products_categories cat ON cat.id = p.category_id";
+
+  if (!hasSubCategory) {
+    return {
+      select: `${categorySelect},
+    NULL::json AS sub_category`,
+      join: categoryJoin,
+    };
+  }
+
+  return {
+    select: `${categorySelect},
+    CASE WHEN subcat.id IS NULL THEN NULL
+      ELSE json_build_object('id', subcat.id, 'name', subcat.name, 'slug', subcat.slug, 'parent_id', subcat.parent_id)
+    END AS sub_category`,
+    join: `${categoryJoin}
+    LEFT JOIN products_categories subcat ON subcat.id = p.sub_category_id`,
+  };
+};
+
 /**
  * Get All Products*/
 const findAll = async (supplier, company, category) => {
   if (supplier == null || isNaN(supplier)) {
     console.log("Lista de produtos para Fornecedores");
+
+    const hasSubCategory = await productsSubCategoryColumnExists(pool);
+    const subCategorySelect = hasSubCategory
+      ? `CASE WHEN subcat.id IS NULL THEN NULL ELSE json_build_object('id', subcat.id, 'name', subcat.name, 'slug', subcat.slug, 'parent_id', subcat.parent_id) END AS sub_category,`
+      : `NULL::json AS sub_category,`;
+    const subCategoryJoin = hasSubCategory ? "LEFT JOIN products_categories subcat ON subcat.id = p.sub_category_id" : "";
+    const brandSql = buildProductBrandSql(await productsBrandIdColumnExists(pool));
 
     const query = `WITH product_items_qty AS (
     SELECT
@@ -117,6 +182,8 @@ SELECT
         'slug',      cat.slug,
         'parent_id', cat.parent_id
     ) AS category,
+    ${subCategorySelect}
+    ${brandSql.select},
 
     COALESCE(ptq.quantity, 0) AS quantity,
 
@@ -127,6 +194,8 @@ SELECT
 FROM products p
 
 LEFT JOIN products_categories cat ON cat.id = p.category_id
+${subCategoryJoin}
+${brandSql.join}
 
 LEFT JOIN product_total_qty ptq ON ptq.product_id = p.id
 
@@ -203,7 +272,7 @@ LEFT JOIN (
 WHERE
     p.company_id = $1
     AND p.deleted_at IS NULL
-    ${category != 0 ? "AND p.category_id IN (SELECT id FROM products_categories WHERE id = $2 OR parent_id = $2)" : ""}
+    ${category != 0 ? `AND (p.category_id IN (SELECT id FROM products_categories WHERE id = $2 OR parent_id = $2)${hasSubCategory ? " OR p.sub_category_id = $2" : ""})` : ""}
 ORDER BY p.active DESC, p.id;`;
 
     const result = await pool.query(query, category != 0 ? [company, category] : [company]);
@@ -211,6 +280,8 @@ ORDER BY p.active DESC, p.id;`;
   } else {
     console.log("Lista de produtos para Clientes");
     const brandSql = buildProductBrandSql(await productsBrandIdColumnExists(pool));
+    const hasSubCol = await productsSubCategoryColumnExists(pool);
+    const categorySql = buildProductCategorySql(hasSubCol);
     const query = `
     WITH client_draft_items AS (
     -- 🔹 Quantidade do cliente por produto + pack
@@ -224,14 +295,28 @@ ORDER BY p.active DESC, p.id;`;
     WHERE o.company_id = $2
       AND o.status = 'DRAFT'
     GROUP BY oi.product_id, oi.package_id
+),
+sold_quantities AS (
+    SELECT
+        oi.product_id,
+        CAST(SUM(oi.quantity) AS INTEGER) AS sales_quantity
+    FROM order_items oi
+    JOIN orders o
+        ON o.id = oi.order_id
+    WHERE o.supplier_id = $1
+      AND o.status IN ('CONFIRMED', 'PENDING_SUPPLIER', 'APPROVED')
+      AND COALESCE(oi.is_bonus, false) = false
+    GROUP BY oi.product_id
 )
 
 SELECT
     p.*,
     ${brandSql.select},
+    ${categorySql.select},
 
     -- 🔹 quantidade total do produto no draft (soma de todos os packs)
     COALESCE(oi.quantity, 0) AS quantity,
+    COALESCE(sq.sales_quantity, 0) AS sales_quantity,
 
     COALESCE(imgs.images, '[]') AS images,
     COALESCE(prs.prices, '[]') AS prices,
@@ -240,6 +325,7 @@ SELECT
 FROM products p
 
 ${brandSql.join}
+${categorySql.join}
 
 -- 🔹 quantidade total do produto (independente do pack)
 LEFT JOIN (
@@ -253,6 +339,9 @@ LEFT JOIN (
       AND o.status = 'DRAFT'
     GROUP BY oi.product_id
 ) oi ON oi.product_id = p.id
+
+LEFT JOIN sold_quantities sq
+    ON sq.product_id = p.id
 
 -- 🔹 imagens
 LEFT JOIN (
@@ -365,8 +454,10 @@ LEFT JOIN (
 WHERE
     p.company_id = $1
     AND p.active = true
-    ${category != 0 ? "AND p.category_id IN (SELECT id FROM products_categories WHERE id = $3 OR parent_id = $3)" : ""}
+    ${category != 0 ? `AND (p.category_id IN (SELECT id FROM products_categories WHERE id = $3 OR parent_id = $3)${hasSubCol ? " OR p.sub_category_id = $3" : ""})` : ""}
 ORDER BY
+    COALESCE(sq.sales_quantity, 0) DESC,
+    LOWER(p.name) ASC,
     p.id;
 
   `;
@@ -381,6 +472,7 @@ const find = async (id, client) => {
 
   if (client != null && client != "null") {
     const brandSql = buildProductBrandSql(await productsBrandIdColumnExists(pool));
+    const categorySql = buildProductCategorySql(await productsSubCategoryColumnExists(pool));
     const result = await pool.query(
       `WITH client_draft_items AS (
         -- 🔹 Busca isolada do que o cliente tem no carrinho por pacote
@@ -398,6 +490,7 @@ const find = async (id, client) => {
     SELECT
         p.*,
         ${brandSql.select},
+    ${categorySql.select},
         COALESCE(imgs.images, '[]') AS images,
         COALESCE(prs.prices, '[]') AS prices,
         COALESCE(pps.packages, '[]') AS packages,
@@ -405,6 +498,7 @@ const find = async (id, client) => {
     FROM products p
 
     ${brandSql.join}
+${categorySql.join}
 
     -- IMAGENS
     LEFT JOIN (
@@ -548,6 +642,7 @@ const find = async (id, client) => {
     return result.rows[0] || null;
   } else {
     const brandSql = buildProductBrandSql(await productsBrandIdColumnExists(pool));
+    const categorySql = buildProductCategorySql(await productsSubCategoryColumnExists(pool));
     const result = await pool.query(
       `
        WITH product_items_qty AS (
@@ -564,6 +659,7 @@ const find = async (id, client) => {
 SELECT
     p.*,
     ${brandSql.select},
+    ${categorySql.select},
     COALESCE(imgs.images, '[]') AS images,
     COALESCE(prs.prices, '[]') AS prices,
     COALESCE(pps.packages, '[]') AS packages,
@@ -571,6 +667,7 @@ SELECT
 FROM products p
 
 ${brandSql.join}
+${categorySql.join}
 
 -- IMAGENS
 LEFT JOIN (
@@ -711,6 +808,7 @@ const create = async (data) => {
     complement,
     brand,
     brandId,
+    industryId,
     packageType,
     unitsPerPackage,
     unitOfMeasure,
@@ -718,6 +816,7 @@ const create = async (data) => {
     active,
     visibility,
     categoryId,
+    subCategoryId,
     companyId,
     image,
     content,
@@ -740,6 +839,8 @@ const create = async (data) => {
       companyId,
     });
     const hasBrandId = await productsBrandIdColumnExists(client);
+    const hasIndustryId = await productsIndustryIdColumnExists(client);
+    const hasSubCategory = await productsSubCategoryColumnExists(client);
 
     const productColumns = [
       "sku",
@@ -769,6 +870,16 @@ const create = async (data) => {
     if (hasBrandId) {
       productColumns.push("brand_id");
       productValues.push(resolvedBrand.brandId);
+    }
+
+    if (hasIndustryId) {
+      productColumns.push("industry_id");
+      productValues.push(parseStringOrNull(industryId ?? data.industry_id));
+    }
+
+    if (hasSubCategory) {
+      productColumns.push("sub_category_id");
+      productValues.push(parseIntegerOrNull(subCategoryId ?? data.sub_category_id));
     }
 
     const insertProductQuery = `
@@ -964,6 +1075,7 @@ const update = async (data) => {
     complement,
     brand,
     brandId,
+    industryId,
     packageType,
     unitsPerPackage,
     unitOfMeasure,
@@ -972,6 +1084,7 @@ const update = async (data) => {
     visibility,
     deletedAt,
     categoryId,
+    subCategoryId,
     companyId,
     image,
     content,
@@ -997,6 +1110,8 @@ const update = async (data) => {
       companyId,
     });
     const hasBrandId = await productsBrandIdColumnExists(client);
+    const hasIndustryId = await productsIndustryIdColumnExists(client);
+    const hasSubCategory = await productsSubCategoryColumnExists(client);
 
     // 1. Update core product row (content + master_package now included)
     const productFields = [
@@ -1024,6 +1139,12 @@ const update = async (data) => {
     ];
     if (hasBrandId) {
       productFields.push(["brand_id", resolvedBrand.brandId]);
+    }
+    if (hasIndustryId) {
+      productFields.push(["industry_id", parseStringOrNull(industryId ?? data.industry_id)]);
+    }
+    if (hasSubCategory) {
+      productFields.push(["sub_category_id", parseIntegerOrNull(subCategoryId ?? data.sub_category_id)]);
     }
 
     const productValues = productFields.map(([, value]) => value);

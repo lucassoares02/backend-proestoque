@@ -31,6 +31,36 @@ const findCategoriesSupplier = async (req, res) => {
 };
 
 /**
+ * Categorias de topo (parent_id IS NULL)
+ */
+const findRoots = async (req, res) => {
+  try {
+    const data = await service.findRoots();
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error("Error fetching root Categories:", error);
+    return res.status(500).json({ error: "Failed to fetch Categories" });
+  }
+};
+
+/**
+ * Subcategorias de uma categoria (parent_id = :id)
+ */
+const findSubcategories = async (req, res) => {
+  const { id } = req.params;
+  if (!id || isNaN(id)) {
+    return res.status(400).json({ error: "Invalid ID" });
+  }
+  try {
+    const data = await service.findSubcategories(parseInt(id));
+    return res.status(200).json(data);
+  } catch (error) {
+    console.error("Error fetching Subcategories:", error);
+    return res.status(500).json({ error: "Failed to fetch Subcategories" });
+  }
+};
+
+/**
  * Get Categories by ID
  */
 const find = async (req, res) => {
@@ -61,6 +91,9 @@ const create = async (req, res) => {
     return res.status(201).json(newItem);
   } catch (error) {
     console.error("Error creating Categories:", error);
+    if (error.statusCode === 400) {
+      return res.status(400).json({ error: error.message });
+    }
     return res.status(500).json({ error: "Failed to create Categories" });
   }
 };
@@ -102,4 +135,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { findAll, find, findCategoriesSupplier, create, update, remove };
+module.exports = { findAll, findRoots, findSubcategories, find, findCategoriesSupplier, create, update, remove };

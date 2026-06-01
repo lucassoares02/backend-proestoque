@@ -37,6 +37,13 @@ SELECT
         'buy_together_campaign_id', oi.buy_together_campaign_id,
         'buy_together_applied', oi.buy_together_applied,
 
+        -- 🔹 bonificação
+        'is_bonus', COALESCE(oi.is_bonus, false),
+        'bonus_rule_id', oi.bonus_rule_id,
+        'bonus_rule_name', br.name,
+        'bonus_rule_description', br.description,
+        'bonus_original_unit_price', bpp.unit_price,
+
         -- 🔹 variação selecionada
         'variant_id', oi.variant_id,
         'variant_name', pv.name,
@@ -71,6 +78,8 @@ LEFT JOIN products p
   ON p.id = oi.product_id
 LEFT JOIN product_variants pv
   ON pv.id = oi.variant_id
+LEFT JOIN bonus_rules br
+  ON br.id = oi.bonus_rule_id
 
 LEFT JOIN LATERAL (
   SELECT url AS image_url
@@ -79,6 +88,14 @@ LEFT JOIN LATERAL (
   ORDER BY id ASC
   LIMIT 1
 ) pi ON TRUE
+
+LEFT JOIN LATERAL (
+  SELECT unit_price
+  FROM products_prices
+  WHERE product_id = oi.product_id
+  ORDER BY qty_min ASC
+  LIMIT 1
+) bpp ON oi.is_bonus = true
 
 WHERE o.company_id = $1
 ${statusClause}
@@ -107,7 +124,40 @@ ORDER BY o.id DESC;
  * Get All Order by Company
  */
 const findOrder = async (company, supplier) => {
-  const result = await pool.query("select * from orders where company_id = $1 and supplier_id = $2", [company, supplier]);
+  // Retorna o(s) pedido(s) DRAFT do par company/supplier com os itens incluídos.
+  // O BonusEngine do cliente depende do array de itens para casar regras de bonificação.
+  const result = await pool.query(
+    `
+    SELECT
+      o.*,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'id',            oi.id,
+            'order_id',      oi.order_id,
+            'product_id',    oi.product_id,
+            'package_id',    oi.package_id,
+            'variant_id',    oi.variant_id,
+            'quantity',      oi.quantity,
+            'unit_price',    oi.unit_price,
+            'total_price',   oi.total_price,
+            'is_bonus',      COALESCE(oi.is_bonus, false),
+            'bonus_rule_id', oi.bonus_rule_id
+          )
+          ORDER BY oi.id
+        ) FILTER (WHERE oi.id IS NOT NULL),
+        '[]'
+      ) AS items
+    FROM orders o
+    LEFT JOIN order_items oi ON oi.order_id = o.id
+    WHERE o.company_id = $1
+      AND o.supplier_id = $2
+      AND o.status = 'DRAFT'
+    GROUP BY o.id
+    ORDER BY o.created_at DESC
+    `,
+    [company, supplier]
+  );
   return result.rows;
 };
 
@@ -136,6 +186,7 @@ const find = async (uuid) => {
             'id',               oi.id,
             'order_id',         oi.order_id,
             'product_id',       oi.product_id,
+            'package_id',       oi.package_id,
 
             'quantity',         oi.quantity,
             'unit_price',       oi.unit_price,
@@ -146,6 +197,13 @@ const find = async (uuid) => {
             'variant_name',     pv.name,
             'variant_sku',      pv.sku,
             'variant_ean',      pv.ean,
+
+            -- bonificação
+            'is_bonus',         COALESCE(oi.is_bonus, false),
+            'bonus_rule_id',    oi.bonus_rule_id,
+            'bonus_rule_name',  br.name,
+            'bonus_rule_description', br.description,
+            'bonus_original_unit_price', bpp.unit_price,
 
             -- dados do produto
             'name',             p.name,
@@ -183,6 +241,8 @@ const find = async (uuid) => {
       ON p.id = oi.product_id
     LEFT JOIN product_variants pv
       ON pv.id = oi.variant_id
+    LEFT JOIN bonus_rules br
+      ON br.id = oi.bonus_rule_id
 
     LEFT JOIN LATERAL (
       SELECT url AS image_url
@@ -191,6 +251,14 @@ const find = async (uuid) => {
       ORDER BY id ASC
       LIMIT 1
     ) pi ON TRUE
+
+    LEFT JOIN LATERAL (
+      SELECT unit_price
+      FROM products_prices
+      WHERE product_id = oi.product_id
+      ORDER BY qty_min ASC
+      LIMIT 1
+    ) bpp ON oi.is_bonus = true
 
     LEFT JOIN users u_creator  ON u_creator.id  = o.created_by_user_id
     LEFT JOIN users u_approver ON u_approver.id = o.approved_by_user_id

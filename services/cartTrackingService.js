@@ -181,7 +181,7 @@ const getSessionSummary = async (supplierId, orderId) => {
        o.status,
        o.payment_method,
        o.boleto_term,
-       o.delivery_date,
+       o.date                                                                          AS delivery_date,
        o.created_at                                                                    AS order_created,
        COALESCE(c.nome_fantasia, c.razao_social)                                       AS buyer_name,
        c.municipio                                                                     AS buyer_municipio,

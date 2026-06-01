@@ -17,15 +17,21 @@ const create = async (req, res) => {
       orderId: order_id ? parseInt(order_id) : null,
       reason,
       notes: notes || null,
-      items: parsedItems.map(i => ({
-        productId:      i.product_id      ? parseInt(i.product_id)  : null,
-        variantId:      i.variant_id      ? parseInt(i.variant_id)  : null,
-        ean:            i.ean             || null,
-        batch:          i.batch           || null,
-        expirationDate: i.expiration_date || null,
-        quantity:       i.quantity        ? parseInt(i.quantity)    : 1,
-        notes:          i.notes          || null,
-      })),
+      items: parsedItems.map(i => {
+        // Aceita camelCase (Flutter) e snake_case para não perder o vínculo do produto.
+        const productId = i.productId ?? i.product_id;
+        const variantId = i.variantId ?? i.variant_id;
+        return {
+          productId:      productId != null && `${productId}` !== "" ? parseInt(productId) : null,
+          variantId:      variantId != null && `${variantId}` !== "" ? parseInt(variantId) : null,
+          product_name:   i.product_name ?? i.productName ?? null,
+          ean:            i.ean             || null,
+          batch:          i.batch           || null,
+          expirationDate: i.expiration_date ?? i.expirationDate ?? null,
+          quantity:       i.quantity        ? parseInt(i.quantity)    : 1,
+          notes:          i.notes          || null,
+        };
+      }),
       createdBy: created_by ? parseInt(created_by) : null,
     });
     return res.status(201).json({ success: true, data, error: null });
