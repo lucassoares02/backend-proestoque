@@ -90,10 +90,13 @@ LEFT JOIN LATERAL (
 ) pi ON TRUE
 
 LEFT JOIN LATERAL (
-  SELECT unit_price
-  FROM products_prices
-  WHERE product_id = oi.product_id
-  ORDER BY qty_min ASC
+  SELECT pp.unit_price
+  FROM products_prices pp
+  LEFT JOIN products_packages ppk ON ppk.id = pp.product_package_id
+  WHERE pp.product_id = oi.product_id
+  ORDER BY
+    (CASE WHEN ppk.package_id = oi.package_id THEN 0 ELSE 1 END),
+    pp.qty_min ASC
   LIMIT 1
 ) bpp ON oi.is_bonus = true
 
@@ -253,10 +256,13 @@ const find = async (uuid) => {
     ) pi ON TRUE
 
     LEFT JOIN LATERAL (
-      SELECT unit_price
-      FROM products_prices
-      WHERE product_id = oi.product_id
-      ORDER BY qty_min ASC
+      SELECT pp.unit_price
+      FROM products_prices pp
+      LEFT JOIN products_packages ppk ON ppk.id = pp.product_package_id
+      WHERE pp.product_id = oi.product_id
+      ORDER BY
+        (CASE WHEN ppk.package_id = oi.package_id THEN 0 ELSE 1 END),
+        pp.qty_min ASC
       LIMIT 1
     ) bpp ON oi.is_bonus = true
 
