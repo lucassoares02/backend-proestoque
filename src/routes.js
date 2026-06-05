@@ -67,6 +67,7 @@ router.patch("/account", authMiddleware, account.update);
 
 //products
 router.get("/products/company/:supplier/:company/:category", products.findAll);
+router.post("/products/search-by-ean", authMiddleware, products.searchByEan);
 router.post("/products", products.create);
 router.patch("/products", products.update);
 router.delete("/products/:id", products.remove);

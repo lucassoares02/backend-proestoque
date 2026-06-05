@@ -1,4 +1,5 @@
 const service = require("../services/productsService");
+const eanLookupService = require("../services/eanLookupService");
 
 /**
  * Get all Products
@@ -87,4 +88,30 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { findAll, find, create, update, remove };
+/**
+ * Cadastro automático: busca dados de um produto por EAN usando IA.
+ * Retorna apenas a sugestão (não salva nada).
+ */
+const searchByEan = async (req, res) => {
+  const ean = req.body && req.body.ean;
+  if (!ean || String(ean).trim() === "") {
+    return res.status(200).json({ success: false, found: false, message: "Informe o EAN." });
+  }
+  try {
+    const user = req.user || {};
+    const result = await eanLookupService.searchByEan(ean, { userId: user.id, email: user.email });
+    return res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    // Erros tratados (EAN inválido, falha da IA, timeout) viram mensagem amigável.
+    if (!error.statusCode || error.statusCode >= 500) {
+      console.error("Error searching product by EAN:", error.cause || error.message);
+    }
+    return res.status(200).json({
+      success: false,
+      found: false,
+      message: error.message || "Falha ao buscar produto por EAN.",
+    });
+  }
+};
+
+module.exports = { findAll, find, create, update, remove, searchByEan };
