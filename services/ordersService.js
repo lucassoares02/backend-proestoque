@@ -52,8 +52,8 @@ SELECT
         'name', p.name,
         'complement', p.complement,
         'brand', p.brand,
-        'package_type', p.package_type,
-        'units_per_package', p.units_per_package,
+        'package_type', COALESCE(selpkg.package_title, p.package_type),
+        'units_per_package', COALESCE(selpkg.package_units, p.units_per_package),
 
         -- 🔹 imagem: prefere da variação, senão a do produto
         'image', COALESCE(pv.image_url, pi.image_url)
@@ -99,6 +99,16 @@ LEFT JOIN LATERAL (
     pp.qty_min ASC
   LIMIT 1
 ) bpp ON oi.is_bonus = true
+
+-- 🔹 embalagem efetivamente comprada (resolve oi.package_id global)
+LEFT JOIN LATERAL (
+  SELECT pkg.title AS package_title, ppk.quantity AS package_units
+  FROM products_packages ppk
+  JOIN packages pkg ON pkg.id = ppk.package_id
+  WHERE ppk.product_id = oi.product_id
+    AND ppk.package_id = oi.package_id
+  LIMIT 1
+) selpkg ON oi.package_id IS NOT NULL
 
 WHERE o.company_id = $1
 ${statusClause}
@@ -212,8 +222,8 @@ const find = async (uuid) => {
             'name',             p.name,
             'complement',       p.complement,
             'brand',            p.brand,
-            'package_type',     p.package_type,
-            'units_per_package',p.units_per_package,
+            'package_type',     COALESCE(selpkg.package_title, p.package_type),
+            'units_per_package',COALESCE(selpkg.package_units, p.units_per_package),
 
             -- imagem: prefere variação, depois produto
             'image',            COALESCE(pv.image_url, pi.image_url),
@@ -265,6 +275,16 @@ const find = async (uuid) => {
         pp.qty_min ASC
       LIMIT 1
     ) bpp ON oi.is_bonus = true
+
+    -- 🔹 embalagem efetivamente comprada (resolve oi.package_id global)
+    LEFT JOIN LATERAL (
+      SELECT pkg.title AS package_title, ppk.quantity AS package_units
+      FROM products_packages ppk
+      JOIN packages pkg ON pkg.id = ppk.package_id
+      WHERE ppk.product_id = oi.product_id
+        AND ppk.package_id = oi.package_id
+      LIMIT 1
+    ) selpkg ON oi.package_id IS NOT NULL
 
     LEFT JOIN users u_creator  ON u_creator.id  = o.created_by_user_id
     LEFT JOIN users u_approver ON u_approver.id = o.approved_by_user_id
