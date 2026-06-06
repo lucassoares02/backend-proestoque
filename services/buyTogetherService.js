@@ -263,8 +263,8 @@ const validateCart = async (supplierId, cartItems) => {
     `${CAMPAIGN_WITH_PRODUCTS_SQL}
      WHERE c.company_id = $1
        AND c.active = true
-       AND c.starts_at <= $2
-       AND c.ends_at >= $2`,
+       AND (c.starts_at IS NULL OR c.starts_at <= $2)
+       AND (c.ends_at IS NULL OR c.ends_at >= $2)`,
     [supplierId, now],
   );
 
@@ -278,6 +278,13 @@ const validateCart = async (supplierId, cartItems) => {
         item.quantity >= campaign.trigger_min_quantity,
     );
     if (!triggerInCart) continue;
+
+    // Quantas vezes o gatilho foi atingido define quantos itens com desconto
+    // o cliente pode levar. Ex.: gatilho de 10 un. com 20 no carrinho => 2.
+    const maxRedeemableQuantity = Math.max(
+      1,
+      Math.floor(triggerInCart.quantity / campaign.trigger_min_quantity),
+    );
 
     const targetAlreadyInCart = cartItems.find(
       (item) =>
@@ -319,6 +326,7 @@ const validateCart = async (supplierId, cartItems) => {
       original_price: originalPrice,
       discounted_price: discountedPrice,
       savings_amount: savingsAmount,
+      max_redeemable_quantity: maxRedeemableQuantity,
     });
   }
 

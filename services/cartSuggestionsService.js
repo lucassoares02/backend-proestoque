@@ -35,8 +35,8 @@ const getSuggestions = async (supplierId, cartItems) => {
      JOIN products tgtp ON tgtp.id = tgt_item.product_id
      WHERE c.company_id = $1
        AND c.active = true
-       AND c.starts_at <= $2
-       AND c.ends_at >= $2
+       AND (c.starts_at IS NULL OR c.starts_at <= $2)
+       AND (c.ends_at IS NULL OR c.ends_at >= $2)
        AND tgtp.active = true
        AND t_item.product_id = ANY($3::int[])
        AND NOT (tgt_item.product_id = ANY($3::int[]))`,
