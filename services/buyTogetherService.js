@@ -294,12 +294,15 @@ const validateCart = async (supplierId, cartItems) => {
     );
     if (targetAlreadyInCart) continue;
 
+    // Respeita a embalagem configurada no alvo da campanha: o preço-base deve
+    // vir da faixa daquela embalagem. Sem embalagem definida, usa a 1ª faixa.
     const priceRes = await pool.query(
       `SELECT unit_price FROM products_prices
        WHERE product_id = $1
+         AND ($2::int IS NULL OR product_package_id = $2)
        ORDER BY qty_min ASC
        LIMIT 1`,
-      [campaign.target_product_id],
+      [campaign.target_product_id, campaign.target_package_id ?? null],
     );
 
     const originalPrice = priceRes.rows[0]?.unit_price != null
