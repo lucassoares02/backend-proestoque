@@ -24,6 +24,7 @@ const cartSuggestions = require("../controllers/cartSuggestionsController");
 const supplierOrders = require("../controllers/supplierOrdersController");
 const supplierDashboard = require("../controllers/supplierDashboardController");
 const buyerDashboard = require("../controllers/buyerDashboardController");
+const clientHome = require("../controllers/clientHomeController");
 const support = require("../controllers/supportTicketsController");
 const paymentSettings = require("../controllers/paymentSettingsController");
 const checkoutPayment = require("../controllers/checkoutPaymentController");
@@ -189,6 +190,17 @@ router.get("/supplier/dashboard/:supplier", supplierDashboard.getDashboard);
 
 //buyer dashboard
 router.get("/buyer/dashboard/:company", buyerDashboard.getDashboard);
+
+//client home — descoberta comercial (agregado de todos os fornecedores do cliente)
+router.get("/client-home/stories/:company",            clientHome.stories);
+router.get("/client-home/campaigns/:company",          clientHome.campaigns);
+router.get("/client-home/suppliers/:company",          clientHome.suppliers);
+router.get("/client-home/brands/:company",             clientHome.brands);
+router.get("/client-home/recommended/:company",        clientHome.recommended);
+router.get("/client-home/opportunities/:company",      clientHome.opportunities);
+router.get("/client-home/recently-purchased/:company", clientHome.recentlyPurchased);
+router.get("/client-home/recently-viewed/:company",    clientHome.recentlyViewed);
+router.post("/products/:id/view",                      clientHome.registerView);
 
 //support tickets — cliente
 router.post("/support/tickets",                             upload.single("file"), support.createTicket);
