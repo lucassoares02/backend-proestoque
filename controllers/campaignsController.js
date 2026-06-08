@@ -38,8 +38,10 @@ const find = async (req, res) => {
 
 const create = async (req, res) => {
   const body = req.body;
-  if (!body?.companyId || !body?.title) {
-    return res.status(400).json({ success: false, error: "companyId e title são obrigatórios" });
+  // Campanha pode ser apenas um banner (com texto embutido na arte), então
+  // o título é opcional — exige-se ao menos o banner ou um título.
+  if (!body?.companyId || (!body?.bannerImageUrl && !body?.title)) {
+    return res.status(400).json({ success: false, error: "companyId e um banner (ou título) são obrigatórios" });
   }
   try {
     const item = await service.create(body);

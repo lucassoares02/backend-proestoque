@@ -52,7 +52,7 @@ const create = async (data) => {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW(),NOW())
      RETURNING *`,
     [
-      companyId, title, description ?? null,
+      companyId, title ?? null, description ?? null,
       bannerImageUrl ?? null, thumbnailImageUrl ?? null,
       buttonText ?? null, buttonColor ?? "#FF6600", backgroundColor ?? "#FFFFFF",
       targetUrl ?? null, targetType ?? "none", targetId ?? null,
@@ -92,7 +92,7 @@ const update = async (data) => {
      WHERE id = $16
      RETURNING *`,
     [
-      companyId, title, description ?? null,
+      companyId, title ?? null, description ?? null,
       bannerImageUrl ?? null, thumbnailImageUrl ?? null,
       buttonText ?? null, buttonColor ?? "#FF6600", backgroundColor ?? "#FFFFFF",
       targetUrl ?? null, targetType ?? "none", targetId ?? null,
