@@ -186,7 +186,7 @@ const getSessionSummary = async (supplierId, orderId) => {
        COALESCE(c.nome_fantasia, c.razao_social)                                       AS buyer_name,
        c.municipio                                                                     AS buyer_municipio,
        c.uf                                                                            AS buyer_uf,
-       c.ddd_telefone_1                                                                AS buyer_phone,
+       c.ddd_telefone1                                                                 AS buyer_phone,
        COUNT(cte.id)::int                                                              AS event_count,
        MIN(cte.created_at)                                                             AS first_event,
        MAX(cte.created_at)                                                             AS last_event,
