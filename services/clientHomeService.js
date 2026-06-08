@@ -253,7 +253,7 @@ const opportunities = async (clientCompanyId) => {
   const items = [];
 
   const camp = await pool.query(
-    `SELECT id, title, description, banner_image_url AS image, target_type, target_id, priority
+    `SELECT id, title, description, banner_image_url AS image, target_type, target_id, priority, company_id
        FROM supplier_campaigns
       WHERE company_id = ANY($1::int[]) AND is_active = true
         AND (start_at IS NULL OR start_at <= $2) AND (end_at IS NULL OR end_at >= $2)
@@ -269,11 +269,12 @@ const opportunities = async (clientCompanyId) => {
       image: c.image,
       target_type: c.target_type,
       target_id: c.target_id,
+      supplier_id: c.company_id,
     });
   }
 
   const bonus = await pool.query(
-    `SELECT r.id, r.name, tp.name AS trigger_name, bp.name AS bonus_name, bp.id AS bonus_product_id
+    `SELECT r.id, r.name, r.company_id, tp.name AS trigger_name, bp.name AS bonus_name, bp.id AS bonus_product_id
        FROM bonus_rules r
        LEFT JOIN products tp ON tp.id = r.trigger_product_id
        LEFT JOIN products bp ON bp.id = r.bonus_product_id
@@ -291,11 +292,12 @@ const opportunities = async (clientCompanyId) => {
       image: null,
       target_type: "product",
       target_id: r.bonus_product_id,
+      supplier_id: r.company_id,
     });
   }
 
   const combo = await pool.query(
-    `SELECT c.id, c.name, tgt.product_id AS target_id, tp.name AS target_name
+    `SELECT c.id, c.name, c.company_id, tgt.product_id AS target_id, tp.name AS target_name
        FROM buy_together_campaigns c
        JOIN buy_together_campaign_items tgt ON tgt.campaign_id = c.id AND tgt.role = 'target'
        LEFT JOIN products tp ON tp.id = tgt.product_id
@@ -313,6 +315,7 @@ const opportunities = async (clientCompanyId) => {
       image: null,
       target_type: "product",
       target_id: c.target_id,
+      supplier_id: c.company_id,
     });
   }
 
