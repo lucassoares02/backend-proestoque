@@ -35,6 +35,7 @@ const campaigns = require("../controllers/campaignsController");
 const productSales = require("../controllers/productSalesController");
 const stories = require("../controllers/storyController");
 const notifications = require("../controllers/notificationController");
+const companyUsers = require("../controllers/companyUsersController");
 const cartTracking      = require("../controllers/cartTrackingController");
 const exchangeRequests  = require("../controllers/exchangeRequestsController");
 
@@ -289,5 +290,17 @@ router.post ("/exchange-requests/:uuid/files", upload.single("file"), exchangeRe
 // fornecedor
 router.get  ("/supplier/exchange-requests",                exchangeRequests.listBySupplier);
 router.get  ("/supplier/exchange-requests/:uuid",          exchangeRequests.findBySupplier);
+
+// ── Gestão de usuários por empresa (convites) ────────────────────────────────
+router.get   ("/company-users/:companyId",                          authMiddleware, companyUsers.list);
+router.post  ("/company-users/:companyId/invite",                   authMiddleware, companyUsers.invite);
+router.post  ("/company-users/:companyId/invite/:inviteId/resend",  authMiddleware, companyUsers.resend);
+router.delete("/company-users/:companyId/invite/:inviteId",         authMiddleware, companyUsers.cancel);
+router.delete("/company-users/:companyId/users/:userId",            authMiddleware, companyUsers.removeMember);
+// convites — públicos (acessados pelos links do e-mail)
+router.get   ("/invites/:token",                  companyUsers.resolve);
+router.post  ("/invites/:token/accept",           companyUsers.accept);
+router.post  ("/invites/:token/decline",          companyUsers.decline);
+router.post  ("/invites/:token/link",             companyUsers.acceptAfterRegistration);
 
 module.exports = router;
