@@ -252,6 +252,8 @@ router.get("/stories/:id/comments/supplier",         stories.getCommentsForSuppl
 router.post("/stories/:id/view",                     stories.recordView);
 router.post("/stories/:id/click",                    stories.recordClick);
 router.post("/stories/:id/react",                    stories.recordReaction);
+router.delete("/stories/:id/react",                  stories.removeReaction);
+router.get("/stories/:id/reactions",                 stories.getReactions);
 router.post("/stories/:id/comment",                  stories.addComment);
 router.patch("/stories/:id/toggle",                  stories.toggle);
 router.patch("/stories/comments/:commentId/hide",    stories.hideComment);

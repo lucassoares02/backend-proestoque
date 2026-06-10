@@ -363,11 +363,12 @@ const recordReaction = async (storyId, viewerCompanyId, reactionType, userId, us
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (story_id, company_id) DO UPDATE
          SET reaction_type = $3, user_id = $4, user_name = $5, reacted_at = NOW()
-       RETURNING id`,
+       RETURNING id, (xmax = 0) AS inserted`,
       [storyId, viewerCompanyId, reactionType || "like", userId || null, userName || null],
     );
 
-    if (insert.rows.length > 0) {
+    // xmax = 0 → linha nova; troca de reação não deve inflar o contador
+    if (insert.rows.length > 0 && insert.rows[0].inserted) {
       await client.query(
         `UPDATE supplier_stories SET reactions_count = reactions_count + 1, updated_at = NOW()
          WHERE id = $1`,
@@ -382,6 +383,40 @@ const recordReaction = async (storyId, viewerCompanyId, reactionType, userId, us
   } finally {
     client.release();
   }
+};
+
+const removeReaction = async (storyId, viewerCompanyId) => {
+  const deleted = await pool.query(
+    `DELETE FROM story_reactions WHERE story_id = $1 AND company_id = $2 RETURNING id`,
+    [storyId, viewerCompanyId],
+  );
+  if (deleted.rows.length > 0) {
+    await pool.query(
+      `UPDATE supplier_stories
+       SET reactions_count = GREATEST(reactions_count - 1, 0), updated_at = NOW()
+       WHERE id = $1`,
+      [storyId],
+    );
+  }
+  return deleted.rows.length > 0;
+};
+
+const getReactions = async (storyId, viewerCompanyId) => {
+  const counts = await pool.query(
+    `SELECT reaction_type, COUNT(*)::int AS count
+     FROM story_reactions WHERE story_id = $1
+     GROUP BY reaction_type`,
+    [storyId],
+  );
+  let myReaction = null;
+  if (viewerCompanyId) {
+    const mine = await pool.query(
+      `SELECT reaction_type FROM story_reactions WHERE story_id = $1 AND company_id = $2`,
+      [storyId, viewerCompanyId],
+    );
+    myReaction = mine.rows[0]?.reaction_type || null;
+  }
+  return { counts: counts.rows, my_reaction: myReaction };
 };
 
 const addComment = async (storyId, viewerCompanyId, content, userId, userName, parentId) => {
@@ -515,6 +550,8 @@ module.exports = {
   recordView,
   recordClick,
   recordReaction,
+  removeReaction,
+  getReactions,
   addComment,
   getComments,
   getCommentsForSupplier,

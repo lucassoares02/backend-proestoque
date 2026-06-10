@@ -184,6 +184,36 @@ const recordReaction = async (req, res) => {
   }
 };
 
+const removeReaction = async (req, res) => {
+  const { id } = req.params;
+  const viewerCompanyId = req.query.viewerCompanyId || req.body?.viewerCompanyId;
+  if (!id || isNaN(id)) return res.status(400).json({ success: false, error: "Invalid ID" });
+  if (!viewerCompanyId) return res.status(400).json({ success: false, error: "viewerCompanyId required" });
+  try {
+    await service.removeReaction(parseInt(id), parseInt(viewerCompanyId));
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error("Error removing reaction:", error);
+    return res.status(500).json({ success: false, error: "Failed to remove reaction" });
+  }
+};
+
+const getReactions = async (req, res) => {
+  const { id } = req.params;
+  const { viewerCompanyId } = req.query;
+  if (!id || isNaN(id)) return res.status(400).json({ success: false, error: "Invalid ID" });
+  try {
+    const data = await service.getReactions(
+      parseInt(id),
+      viewerCompanyId ? parseInt(viewerCompanyId) : null,
+    );
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("Error fetching reactions:", error);
+    return res.status(500).json({ success: false, error: "Failed to fetch reactions" });
+  }
+};
+
 const addComment = async (req, res) => {
   const { id } = req.params;
   const { viewerCompanyId, content, userId, userName, parentId } = req.body;
@@ -281,6 +311,8 @@ module.exports = {
   recordView,
   recordClick,
   recordReaction,
+  removeReaction,
+  getReactions,
   addComment,
   getComments,
   getCommentsForSupplier,
