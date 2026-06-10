@@ -1,6 +1,8 @@
 const pool = require("../db");
 
 const SALE_STATUSES = ['CONFIRMED', 'PENDING_SUPPLIER', 'APPROVED'];
+// Pedidos aguardando revisão/aprovação — mesma definição do KPI "Pedidos Pendentes".
+const PENDING_STATUSES = ['PENDING_SUPPLIER', 'CONFIRMED'];
 
 const _safe = async (label, fn, fallback) => {
   try {
@@ -107,7 +109,9 @@ const _getEvolutionDays = async (supplierId, daysBack) => {
     daily AS (
       SELECT DATE(created_at) AS day,
              COALESCE(SUM(total_value), 0) AS revenue,
-             COUNT(*) AS orders
+             COUNT(*) AS orders,
+             COALESCE(SUM(total_value) FILTER (WHERE status = ANY($4::varchar[])), 0) AS pending_revenue,
+             COUNT(*) FILTER (WHERE status = ANY($4::varchar[])) AS pending_orders
       FROM orders
       WHERE supplier_id = $1
         AND status = ANY($3::varchar[])
@@ -116,12 +120,14 @@ const _getEvolutionDays = async (supplierId, daysBack) => {
     )
     SELECT ds.day::text AS date,
            COALESCE(d.revenue, 0) AS revenue,
-           COALESCE(d.orders, 0) AS orders
+           COALESCE(d.orders, 0) AS orders,
+           COALESCE(d.pending_revenue, 0) AS pending_revenue,
+           COALESCE(d.pending_orders, 0) AS pending_orders
     FROM date_series ds
     LEFT JOIN daily d ON d.day = ds.day
     ORDER BY ds.day ASC
   `;
-  const { rows } = await pool.query(sql, [supplierId, daysBack, SALE_STATUSES]);
+  const { rows } = await pool.query(sql, [supplierId, daysBack, SALE_STATUSES, PENDING_STATUSES]);
   return rows;
 };
 
@@ -137,7 +143,9 @@ const _getEvolution12m = async (supplierId) => {
     monthly AS (
       SELECT date_trunc('month', created_at)::date AS month,
              COALESCE(SUM(total_value), 0) AS revenue,
-             COUNT(*) AS orders
+             COUNT(*) AS orders,
+             COALESCE(SUM(total_value) FILTER (WHERE status = ANY($3::varchar[])), 0) AS pending_revenue,
+             COUNT(*) FILTER (WHERE status = ANY($3::varchar[])) AS pending_orders
       FROM orders
       WHERE supplier_id = $1
         AND status = ANY($2::varchar[])
@@ -146,12 +154,14 @@ const _getEvolution12m = async (supplierId) => {
     )
     SELECT ms.month::text AS date,
            COALESCE(mo.revenue, 0) AS revenue,
-           COALESCE(mo.orders, 0) AS orders
+           COALESCE(mo.orders, 0) AS orders,
+           COALESCE(mo.pending_revenue, 0) AS pending_revenue,
+           COALESCE(mo.pending_orders, 0) AS pending_orders
     FROM month_series ms
     LEFT JOIN monthly mo ON mo.month = ms.month
     ORDER BY ms.month ASC
   `;
-  const { rows } = await pool.query(sql, [supplierId, SALE_STATUSES]);
+  const { rows } = await pool.query(sql, [supplierId, SALE_STATUSES, PENDING_STATUSES]);
   return rows;
 };
 
@@ -166,6 +176,7 @@ const _getTopProducts = async (supplierId) => {
     JOIN orders o ON o.id = oi.order_id
     WHERE p.company_id = $1
       AND o.status = ANY($2::varchar[])
+      AND COALESCE(oi.is_removed, false) = false
       AND o.created_at >= (CURRENT_DATE - INTERVAL '30 days')
     GROUP BY p.id, p.name
     ORDER BY revenue DESC
@@ -205,6 +216,7 @@ const _getCategories = async (supplierId) => {
     LEFT JOIN products_categories cat ON cat.id = p.category_id
     WHERE o.supplier_id = $1
       AND o.status = ANY($2::varchar[])
+      AND COALESCE(oi.is_removed, false) = false
       AND o.created_at >= (CURRENT_DATE - INTERVAL '30 days')
     GROUP BY cat.name
     ORDER BY revenue DESC
@@ -228,6 +240,7 @@ const _getInsights = async (supplierId) => {
           JOIN orders o ON o.id = oi.order_id
           WHERE oi.product_id = p.id
             AND o.supplier_id = $1
+            AND COALESCE(oi.is_removed, false) = false
             AND o.created_at >= (CURRENT_DATE - INTERVAL '30 days')
             AND o.status = ANY($2::varchar[])
         )

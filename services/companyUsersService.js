@@ -3,8 +3,9 @@ const pool = require("../db");
 const { sendEmailSmtp } = require("./mailerService");
 const { createNotification } = require("./notificationService");
 
+// URL base do portal (Flutter Web usa hash routing → links precisam de "/#/").
 const FRONTEND_URL =
-  process.env.FRONTEND_URL || "https://portal.proestoque.profair.click";
+  process.env.FRONTEND_URL || "https://proestoque-8a63e.web.app";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -407,8 +408,9 @@ const acceptInviteAfterRegistration = async (token, userId) => {
 // ── email helper ──────────────────────────────────────────────────────────────
 
 const _sendInviteEmail = async ({ email, name, token, companyName, inviterName }) => {
-  const acceptLink = `${FRONTEND_URL}/invite/${token}/accept`;
-  const declineLink = `${FRONTEND_URL}/invite/${token}/decline`;
+  // Flutter Web usa hash routing → o caminho da rota precisa vir depois de "/#/".
+  const acceptLink = `${FRONTEND_URL}/#/invite/${token}/accept`;
+  const declineLink = `${FRONTEND_URL}/#/invite/${token}/decline`;
   const displayName = name ? `, ${name}` : "";
 
   const html = `
