@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const pool = require("../db");
 const { sendEmailSmtp } = require("./mailerService");
 const { createNotification } = require("./notificationService");
+const { hashPassword } = require("../helpers/hash");
 
 // URL base do portal (Flutter Web usa hash routing → links precisam de "/#/").
 const FRONTEND_URL =
@@ -87,8 +88,11 @@ const listMembers = async (companyId) => {
 
 // ── createInvite ──────────────────────────────────────────────────────────────
 
-const createInvite = async (companyId, { email, name, invitedBy }) => {
+const createInvite = async (companyId, { email, name, role, invitedBy }) => {
   await _checkPermission(companyId, invitedBy);
+
+  // Perfil do convidado: 'owner' (Proprietário) ou 'member' (Colaborador).
+  const inviteRole = role === "owner" ? "owner" : "member";
 
   // Verificar se já é membro
   const isMember = await pool.query(
@@ -119,21 +123,21 @@ const createInvite = async (companyId, { email, name, invitedBy }) => {
   if (existing.rows.length > 0) {
     token = existing.rows[0].token;
     inviteId = existing.rows[0].id;
-    // Renova expiração
+    // Renova expiração e atualiza o perfil
     await pool.query(
       `UPDATE company_invites
-          SET expires_at = now() + INTERVAL '7 days', updated_at = now()
+          SET role = $2, expires_at = now() + INTERVAL '7 days', updated_at = now()
         WHERE id = $1`,
-      [inviteId],
+      [inviteId, inviteRole],
     );
   } else {
     token = crypto.randomBytes(32).toString("hex");
     const ins = await pool.query(
       `INSERT INTO company_invites
          (company_id, email, name, token, status, relation_type, role, invited_by)
-       VALUES ($1, $2, $3, $4, 'pending', $5, 'member', $6)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
        RETURNING id`,
-      [companyId, email, name || null, token, relationType, invitedBy],
+      [companyId, email, name || null, token, relationType, inviteRole, invitedBy],
     );
     inviteId = ins.rows[0].id;
   }
@@ -142,23 +146,36 @@ const createInvite = async (companyId, { email, name, invitedBy }) => {
 
   await _sendInviteEmail({ email, name, token, companyName, inviterName });
 
-  // Notificar o usuário convidado se já tiver conta
+  // Notificar o usuário convidado se já tiver conta. O sino de notificações
+  // lista por empresa, então a notificação é criada nas empresas ativas do
+  // convidado (e não na empresa que convida, que ele ainda não acessa).
   const userRow = await pool.query(
     "SELECT id FROM users WHERE lower(email) = lower($1)",
     [email],
   );
   if (userRow.rows.length > 0) {
-    await createNotification({
-      companyId,
-      userId: userRow.rows[0].id,
-      userType: relationType,
-      title: `Convite para ${companyName}`,
-      description: `${inviterName} convidou você para participar da empresa ${companyName}.`,
-      notificationType: "info",
-      entityType: "user_invite",
-      entityId: inviteId,
-      metadata: { status: "pending", inviterName, companyName, token },
-    });
+    const inviteeId = userRow.rows[0].id;
+    const inviteeCompanies = await pool.query(
+      `SELECT company_id, relation_type FROM users_companies
+        WHERE user_id = $1 AND status = 'active'`,
+      [inviteeId],
+    );
+    const targets = inviteeCompanies.rows.length > 0
+      ? inviteeCompanies.rows
+      : [{ company_id: companyId, relation_type: relationType }];
+    for (const t of targets) {
+      await createNotification({
+        companyId: t.company_id,
+        userId: inviteeId,
+        userType: t.relation_type,
+        title: `Convite para ${companyName}`,
+        description: `${inviterName} convidou você para participar da empresa ${companyName}.`,
+        notificationType: "info",
+        entityType: "user_invite",
+        entityId: inviteId,
+        metadata: { status: "pending", inviterName, companyName, token },
+      });
+    }
   }
 
   return { inviteId, token };
@@ -210,6 +227,15 @@ const cancelInvite = async (companyId, inviteId, requesterId) => {
 const removeMember = async (companyId, targetUserId, requesterId) => {
   await _checkPermission(companyId, requesterId);
   if (targetUserId === requesterId) throw new Error("Você não pode remover a si mesmo.");
+
+  const target = await pool.query(
+    `SELECT role FROM users_companies
+      WHERE company_id = $1 AND user_id = $2 AND status = 'active'`,
+    [companyId, targetUserId],
+  );
+  if (target.rows[0]?.role === "owner") {
+    throw new Error("O proprietário não pode ser removido da empresa.");
+  }
 
   const r = await pool.query(
     `UPDATE users_companies
@@ -368,6 +394,99 @@ const declineInvite = async (token) => {
   return { declined: true };
 };
 
+// ── listPendingInvitesForUser (convites pendentes do usuário logado) ─────────
+
+const listPendingInvitesForUser = async (email) => {
+  const r = await pool.query(
+    `SELECT ci.id, ci.token, ci.role, ci.created_at, ci.expires_at,
+            c.nome_fantasia, c.razao_social, u.name AS inviter_name
+       FROM company_invites ci
+       JOIN companies c ON c.id = ci.company_id
+       LEFT JOIN users u ON u.id = ci.invited_by
+      WHERE lower(ci.email) = lower($1)
+        AND ci.status = 'pending'
+        AND ci.expires_at > now()
+      ORDER BY ci.created_at DESC`,
+    [email],
+  );
+  return r.rows.map((inv) => ({
+    inviteId: inv.id,
+    token: inv.token,
+    role: inv.role,
+    companyName: inv.nome_fantasia || inv.razao_social,
+    inviterName: inv.inviter_name || "Alguém",
+    invitedAt: inv.created_at,
+    expiresAt: inv.expires_at,
+  }));
+};
+
+// ── registerInvitedUser (cadastro simplificado via convite, sem CNPJ) ─────────
+
+const registerInvitedUser = async (token, { name, password }) => {
+  if (!name || !password) throw new Error("Nome e senha são obrigatórios.");
+
+  const r = await pool.query(
+    `SELECT ci.*, c.nome_fantasia, c.razao_social
+       FROM company_invites ci
+       JOIN companies c ON c.id = ci.company_id
+      WHERE ci.token = $1`,
+    [token],
+  );
+  if (!r.rows[0]) throw new Error("Convite inválido.");
+  const inv = r.rows[0];
+  if (inv.status !== "pending") throw new Error("Este convite já foi utilizado.");
+  if (new Date(inv.expires_at) < new Date()) throw new Error("Este convite expirou.");
+
+  const existingUser = await pool.query(
+    "SELECT id FROM users WHERE lower(email) = lower($1)",
+    [inv.email],
+  );
+  if (existingUser.rows.length > 0) {
+    throw new Error("Este e-mail já possui conta. Faça login para aceitar o convite.");
+  }
+
+  const hashedPassword = await hashPassword(password);
+  const created = await pool.query(
+    `INSERT INTO users (name, email, password)
+     VALUES ($1, $2, $3)
+     RETURNING id, name, email, type, active`,
+    [name.trim(), inv.email, hashedPassword],
+  );
+  const user = created.rows[0];
+
+  await pool.query(
+    `INSERT INTO users_companies (company_id, user_id, relation_type, role, status)
+     VALUES ($1, $2, $3, $4, 'active')`,
+    [inv.company_id, user.id, inv.relation_type, inv.role],
+  );
+
+  await pool.query(
+    `UPDATE company_invites
+        SET status = 'accepted', accepted_at = now(), updated_at = now()
+      WHERE id = $1`,
+    [inv.id],
+  );
+
+  const companyName = inv.nome_fantasia || inv.razao_social;
+
+  // Notificar o convidador
+  if (inv.invited_by) {
+    await createNotification({
+      companyId: inv.company_id,
+      userId: inv.invited_by,
+      userType: inv.relation_type,
+      title: `${user.name} aceitou o convite`,
+      description: `${user.name} agora faz parte de ${companyName}.`,
+      notificationType: "success",
+      entityType: "user_invite",
+      entityId: inv.id,
+      metadata: { status: "accepted", accepterName: user.name, companyName },
+    });
+  }
+
+  return { user, companyId: inv.company_id, companyName, relationType: inv.relation_type };
+};
+
 // ── acceptInviteAfterRegistration (chamado após criar conta via /register?invite=) ──
 
 const acceptInviteAfterRegistration = async (token, userId) => {
@@ -486,4 +605,6 @@ module.exports = {
   acceptInvite,
   declineInvite,
   acceptInviteAfterRegistration,
+  listPendingInvitesForUser,
+  registerInvitedUser,
 };

@@ -1,4 +1,5 @@
 const service = require("../services/companyUsersService");
+const { generateToken } = require("../helpers/jwt");
 
 // Auth middleware coloca o token decodificado em req.user = { id, email, type }
 const _userId = (req) => req.user?.id;
@@ -17,12 +18,12 @@ const list = async (req, res) => {
 
 const invite = async (req, res) => {
   const companyId = parseInt(req.params.companyId, 10);
-  const { email, name } = req.body || {};
+  const { email, name, role } = req.body || {};
   if (!companyId || !email) {
     return res.status(400).json({ success: false, error: "companyId e email são obrigatórios" });
   }
   try {
-    const data = await service.createInvite(companyId, { email, name, invitedBy: _userId(req) });
+    const data = await service.createInvite(companyId, { email, name, role, invitedBy: _userId(req) });
     return res.status(201).json({ success: true, data });
   } catch (e) {
     console.error("[companyUsers] invite error:", e.message);
@@ -112,6 +113,43 @@ const acceptAfterRegistration = async (req, res) => {
   }
 };
 
+// Convites pendentes do usuário logado (exibidos em Conta → Convites Pendentes)
+const myInvites = async (req, res) => {
+  const email = req.user?.email;
+  if (!email) return res.status(401).json({ success: false, error: "Não autenticado" });
+  try {
+    const data = await service.listPendingInvitesForUser(email);
+    return res.json({ success: true, data });
+  } catch (e) {
+    console.error("[companyUsers] myInvites error:", e.message);
+    return res.status(500).json({ success: false, error: "Falha ao listar convites" });
+  }
+};
+
+// Cadastro simplificado via convite (sem CNPJ): cria o usuário, vincula à
+// empresa do convite e retorna o JWT no mesmo formato do /signin para o
+// frontend efetuar login automático.
+const registerWithInvite = async (req, res) => {
+  const { token } = req.params;
+  const { name, password } = req.body || {};
+  if (!token || !name || !password) {
+    return res.status(400).json({ success: false, error: "token, name e password são obrigatórios" });
+  }
+  try {
+    const data = await service.registerInvitedUser(token, { name, password });
+    const jwt = generateToken({ id: data.user.id, email: data.user.email, type: data.user.type });
+    return res.status(201).json({
+      success: true,
+      token: jwt,
+      user: data.user,
+      data: { companyId: data.companyId, companyName: data.companyName, relationType: data.relationType },
+    });
+  } catch (e) {
+    console.error("[companyUsers] registerWithInvite error:", e.message);
+    return res.status(400).json({ success: false, error: e.message });
+  }
+};
+
 module.exports = {
   list,
   invite,
@@ -122,4 +160,6 @@ module.exports = {
   accept,
   decline,
   acceptAfterRegistration,
+  myInvites,
+  registerWithInvite,
 };

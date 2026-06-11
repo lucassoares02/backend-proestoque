@@ -299,10 +299,14 @@ router.post  ("/company-users/:companyId/invite",                   authMiddlewa
 router.post  ("/company-users/:companyId/invite/:inviteId/resend",  authMiddleware, companyUsers.resend);
 router.delete("/company-users/:companyId/invite/:inviteId",         authMiddleware, companyUsers.cancel);
 router.delete("/company-users/:companyId/users/:userId",            authMiddleware, companyUsers.removeMember);
+// convites pendentes do usuário logado (Conta → Convites Pendentes)
+router.get   ("/my-invites",                      authMiddleware, companyUsers.myInvites);
 // convites — públicos (acessados pelos links do e-mail)
 router.get   ("/invites/:token",                  companyUsers.resolve);
 router.post  ("/invites/:token/accept",           companyUsers.accept);
 router.post  ("/invites/:token/decline",          companyUsers.decline);
 router.post  ("/invites/:token/link",             companyUsers.acceptAfterRegistration);
+// cadastro simplificado via convite (sem CNPJ) + login automático
+router.post  ("/invites/:token/register",         companyUsers.registerWithInvite);
 
 module.exports = router;
