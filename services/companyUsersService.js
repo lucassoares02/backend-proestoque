@@ -449,10 +449,11 @@ const registerInvitedUser = async (token, { name, password }) => {
   const created = await pool.query(
     `INSERT INTO users (name, email, password)
      VALUES ($1, $2, $3)
-     RETURNING id, name, email, type, active`,
+     RETURNING *`,
     [name.trim(), inv.email, hashedPassword],
   );
-  const user = created.rows[0];
+  // Mesmo formato do /signin: linha completa sem o hash da senha.
+  const { password: _, ...user } = created.rows[0];
 
   await pool.query(
     `INSERT INTO users_companies (company_id, user_id, relation_type, role, status)
