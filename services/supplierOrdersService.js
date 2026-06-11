@@ -1,5 +1,6 @@
 const pool = require("../db");
 const notificationService = require("./notificationService");
+const cartTracking = require("./cartTrackingService");
 
 const findAll = async (supplierId, statusFilter) => {
   let statusClause;
@@ -226,6 +227,17 @@ const review = async (uuid, supplierId, action, comment, approvedByUserId) => {
     await client.query("COMMIT");
     const reviewedOrder = result.rows[0];
     const statusLabel = newStatus === "APPROVED" ? "aprovado" : "reprovado";
+
+    // Jornada do Cliente: "Pedido aprovado" / "Pedido recusado"
+    cartTracking.saveEvent({
+      supplierId: reviewedOrder.supplier_id,
+      buyerCompanyId: reviewedOrder.company_id,
+      orderId: reviewedOrder.id,
+      eventType: newStatus === "APPROVED" ? "order_approved" : "order_rejected",
+      stepName: "review",
+      metadata: { comment: comment || null },
+    }).catch(() => {});
+
     notificationService.createNotification({
       companyId: reviewedOrder.company_id,
       userType: 1,

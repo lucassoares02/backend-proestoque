@@ -1,4 +1,5 @@
 const pool = require("../db");
+const cartTracking = require("./cartTrackingService");
 
 /**
  * Get All Orders
@@ -334,6 +335,27 @@ const create = async (uuid, payment_method, delivery_date, comment, boleto_term,
      RETURNING *`,
     [uuid, legacyInt, methodStr, boleto_term ?? null, delivery_date, comment, created_by_user_id ?? null],
   );
+
+  // Jornada do Cliente: "Pedido enviado" — registrado no servidor para não
+  // depender do frontend (que pode fechar a aba antes do evento ser enviado).
+  const order = result.rows[0];
+  if (order) {
+    cartTracking.saveEvent({
+      supplierId: order.supplier_id,
+      buyerCompanyId: order.company_id,
+      buyerUserId: created_by_user_id ?? null,
+      orderId: order.id,
+      eventType: "checkout_completed",
+      stepName: "checkout",
+      metadata: {
+        payment_method: methodStr,
+        boleto_term: boleto_term ?? null,
+        delivery_date: delivery_date ?? null,
+        total_value: order.total_value ?? null,
+      },
+    }).catch(() => {});
+  }
+
   return result.rows[0];
 };
 

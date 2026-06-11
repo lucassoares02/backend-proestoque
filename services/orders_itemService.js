@@ -1,4 +1,106 @@
 const pool = require("../db");
+const cartTracking = require("./cartTrackingService");
+
+/**
+ * Jornada do Cliente: registra o evento de tracking correspondente à mutação
+ * do item do carrinho (adição, alteração de quantidade, remoção ou bonificação).
+ * Fire-and-forget — nunca falha a operação principal.
+ */
+const _fireCartEvent = async ({
+  supplierId,
+  buyerCompanyId,
+  orderId,
+  productId,
+  variantId,
+  packageId,
+  isBonus,
+  bonusRuleId,
+  prevQuantity,
+  newQuantity,
+  unitPrice,
+  totalPrice,
+}) => {
+  try {
+    if (!supplierId || !buyerCompanyId || !orderId || !productId) return;
+    if (prevQuantity === newQuantity) return;
+
+    const base = {
+      supplierId,
+      buyerCompanyId,
+      orderId,
+      productId,
+      variantId: variantId ?? null,
+      stepName: "cart",
+    };
+
+    if (isBonus) {
+      // Item bônus inserido/atualizado pelo motor de bonificações.
+      if (newQuantity <= 0) return; // remoção de bônus não gera evento
+      const metadata = {
+        is_bonus: true,
+        bonus_rule_id: bonusRuleId ?? null,
+        bonus_quantity: newQuantity,
+        package_id: packageId ?? null,
+      };
+      if (bonusRuleId) {
+        const rule = await pool.query(
+          `SELECT name, minimum_quantity, bonus_quantity FROM bonus_rules WHERE id = $1`,
+          [bonusRuleId],
+        );
+        if (rule.rows[0]) {
+          metadata.rule_name = rule.rows[0].name;
+          metadata.trigger_quantity = rule.rows[0].minimum_quantity;
+          metadata.rule_bonus_quantity = rule.rows[0].bonus_quantity;
+        }
+      }
+      await cartTracking.saveEvent({
+        ...base,
+        eventType: "bonus_unlocked",
+        quantity: newQuantity,
+        metadata,
+      });
+      return;
+    }
+
+    if (prevQuantity === 0 && newQuantity > 0) {
+      await cartTracking.saveEvent({
+        ...base,
+        eventType: "product_added",
+        quantity: newQuantity,
+        metadata: {
+          quantity: newQuantity,
+          unit_price: unitPrice ?? null,
+          total_price: totalPrice ?? null,
+          package_id: packageId ?? null,
+        },
+      });
+    } else if (newQuantity === 0 && prevQuantity > 0) {
+      await cartTracking.saveEvent({
+        ...base,
+        eventType: "product_removed",
+        quantity: prevQuantity,
+        metadata: {
+          removed_quantity: prevQuantity,
+          package_id: packageId ?? null,
+        },
+      });
+    } else {
+      await cartTracking.saveEvent({
+        ...base,
+        eventType: "quantity_changed",
+        quantity: newQuantity,
+        metadata: {
+          previous_quantity: prevQuantity,
+          new_quantity: newQuantity,
+          unit_price: unitPrice ?? null,
+          package_id: packageId ?? null,
+        },
+      });
+    }
+  } catch (e) {
+    console.error("[orders_itemService] _fireCartEvent error:", e.message);
+  }
+};
 
 /**
  * Get All OrdersItem
@@ -114,6 +216,23 @@ const create = async (data) => {
         finalOrderId = created.rows[0].id;
       }
     }
+
+    // 🔹 Quantidade anterior do item (mesma chave) — usada para decidir qual
+    //    evento da Jornada do Cliente registrar após o COMMIT.
+    const prevRes = await client.query(
+      `
+      SELECT quantity
+      FROM order_items
+      WHERE order_id = $1
+        AND product_id = $2
+        AND package_id IS NOT DISTINCT FROM $3
+        AND variant_id IS NOT DISTINCT FROM $4
+        AND COALESCE(is_bonus, false) = $5
+      LIMIT 1
+      `,
+      [finalOrderId, product_id, package_id ?? null, variant_id ?? null, is_bonus ?? false],
+    );
+    const prevQuantity = prevRes.rows[0] ? Number(prevRes.rows[0].quantity) : 0;
 
     // 🔹 Remove item discriminando por package + variant + is_bonus
     //    Itens normais e itens bônus são distintos mesmo com mesmo produto/variação/pack.
@@ -233,6 +352,22 @@ const create = async (data) => {
     }
 
     await client.query("COMMIT");
+
+    // Jornada do Cliente — registrado fora da transação para nunca afetar o pedido.
+    _fireCartEvent({
+      supplierId: supplier_id,
+      buyerCompanyId: company_id,
+      orderId: finalOrderId,
+      productId: product_id,
+      variantId: variant_id ?? null,
+      packageId: package_id ?? null,
+      isBonus: is_bonus ?? false,
+      bonusRuleId: bonus_rule_id ?? null,
+      prevQuantity,
+      newQuantity: parsedQuantity,
+      unitPrice: finalUnitPrice,
+      totalPrice: finalTotalPrice,
+    });
 
     return {
       order_id: finalOrderId,

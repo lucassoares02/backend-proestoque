@@ -156,8 +156,10 @@ const getSessionTimeline = async (supplierId, orderId) => {
        )                                                                               AS product_image,
        p.package_type,
        p.units_per_package,
+       p.ean                                                                           AS product_ean,
        pv.name                                                                         AS variant_name,
        pv.sku                                                                          AS variant_sku,
+       pv.ean                                                                          AS variant_ean,
        oi.unit_price,
        oi.total_price
      FROM cart_tracking_events cte
@@ -352,7 +354,7 @@ const getMetrics = async (supplierId, { period = 30 } = {}) => {
       { step: "Produto adicionado", key: "product_added", count: funnelMap["product_added"] || 0 },
       { step: "Checkout iniciado", key: "checkout_started", count: funnelMap["checkout_started"] || 0 },
       { step: "Pagamento selecionado", key: "payment_selected", count: funnelMap["payment_selected"] || 0 },
-      { step: "Pedido concluído", key: "checkout_completed", count: funnelMap["checkout_completed"] || 0 },
+      { step: "Pedido enviado", key: "checkout_completed", count: funnelMap["checkout_completed"] || 0 },
     ],
   };
 };
