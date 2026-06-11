@@ -14,6 +14,58 @@ const getSuggestions = async (supplierId, cartItems) => {
   const suggestions = [];
   const suggestedProductIds = new Set();
 
+  // ─── Sinais comerciais: bonificações ativas e mais vendidos ──────
+  // Carregados uma vez e usados para priorizar e anotar as sugestões.
+  const bonusRulesRes = await pool.query(
+    `SELECT trigger_product_id, name, minimum_quantity, bonus_quantity
+     FROM bonus_rules
+     WHERE company_id = $1
+       AND is_active = true
+       AND (starts_at IS NULL OR starts_at <= $2)
+       AND (ends_at IS NULL OR ends_at >= $2)`,
+    [supplierId, now],
+  );
+  const bonusByProduct = new Map();
+  for (const r of bonusRulesRes.rows) {
+    if (!bonusByProduct.has(r.trigger_product_id)) bonusByProduct.set(r.trigger_product_id, r);
+  }
+
+  const bestSellersRes = await pool.query(
+    `SELECT oi.product_id, SUM(oi.quantity)::int AS sold
+     FROM order_items oi
+     JOIN orders o ON o.id = oi.order_id
+     WHERE o.supplier_id = $1
+       AND o.status IN ('PENDING_SUPPLIER', 'CONFIRMED', 'APPROVED')
+     GROUP BY oi.product_id
+     ORDER BY sold DESC
+     LIMIT 15`,
+    [supplierId],
+  );
+  const bestSellerIds = new Set(bestSellersRes.rows.map((r) => r.product_id));
+
+  // Busca dados básicos de um conjunto de produtos do fornecedor (com preço).
+  const fetchProducts = async (ids) => {
+    if (!ids.length) return [];
+    const r = await pool.query(
+      `SELECT
+         p.id AS product_id,
+         p.name,
+         p.category_id,
+         p.brand,
+         (SELECT pi.url FROM products_images pi
+          WHERE pi.product_id = p.id ORDER BY pi.sort_order LIMIT 1) AS image,
+         (SELECT pp.unit_price FROM products_prices pp
+          WHERE pp.product_id = p.id ORDER BY pp.qty_min ASC LIMIT 1) AS price
+       FROM products p
+       WHERE p.id = ANY($1::int[])
+         AND p.company_id = $2
+         AND p.active = true
+         AND EXISTS (SELECT 1 FROM products_prices pp WHERE pp.product_id = p.id)`,
+      [ids, supplierId],
+    );
+    return r.rows.filter((row) => row.price);
+  };
+
   // ─── Priority 1: buy_together eligible campaigns ─────────────────
   const btResult = await pool.query(
     `SELECT
@@ -25,6 +77,7 @@ const getSuggestions = async (supplierId, cartItems) => {
        tgt_item.product_id AS target_product_id,
        tgtp.name           AS target_product_name,
        tgtp.category_id    AS target_category_id,
+       tgtp.brand          AS target_brand,
        (SELECT pi.url FROM products_images pi
         WHERE pi.product_id = tgtp.id ORDER BY pi.sort_order LIMIT 1) AS target_image
      FROM buy_together_campaigns c
@@ -72,6 +125,7 @@ const getSuggestions = async (supplierId, cartItems) => {
       image: row.target_image,
       price: originalPrice,
       category_id: row.target_category_id,
+      brand: row.target_brand,
       suggestion_type: "buy_together",
       campaign_id: row.campaign_id,
       discount_type: row.discount_type,
@@ -79,6 +133,49 @@ const getSuggestions = async (supplierId, cartItems) => {
       discounted_price: discountedPrice,
     });
     suggestedProductIds.add(row.target_product_id);
+  }
+
+  // ─── Priority 1.5: produtos com bonificação ativa (Ganhe bonificação) ──
+  const bonusCandidates = [...bonusByProduct.keys()]
+    .filter((id) => !cartProductIds.includes(id) && !suggestedProductIds.has(id))
+    .slice(0, 3);
+  for (const row of await fetchProducts(bonusCandidates)) {
+    suggestions.push({
+      product_id: row.product_id,
+      name: row.name,
+      image: row.image,
+      price: parseFloat(row.price),
+      category_id: row.category_id,
+      brand: row.brand,
+      suggestion_type: "bonus",
+      campaign_id: null,
+      discount_type: null,
+      discount_value: null,
+      discounted_price: null,
+    });
+    suggestedProductIds.add(row.product_id);
+  }
+
+  // ─── Priority 1.75: mais vendidos do fornecedor ───────────────────
+  const bestSellerCandidates = bestSellersRes.rows
+    .map((r) => r.product_id)
+    .filter((id) => !cartProductIds.includes(id) && !suggestedProductIds.has(id))
+    .slice(0, 3);
+  for (const row of await fetchProducts(bestSellerCandidates)) {
+    suggestions.push({
+      product_id: row.product_id,
+      name: row.name,
+      image: row.image,
+      price: parseFloat(row.price),
+      category_id: row.category_id,
+      brand: row.brand,
+      suggestion_type: "best_seller",
+      campaign_id: null,
+      discount_type: null,
+      discount_value: null,
+      discounted_price: null,
+    });
+    suggestedProductIds.add(row.product_id);
   }
 
   // ─── Priority 2: mesma categoria OU mesma marca ───────────────────
@@ -132,6 +229,7 @@ const getSuggestions = async (supplierId, cartItems) => {
         image: row.image,
         price: parseFloat(row.price),
         category_id: row.category_id,
+        brand: row.brand,
         suggestion_type: row.suggestion_type,
         campaign_id: null,
         discount_type: null,
@@ -176,6 +274,7 @@ const getSuggestions = async (supplierId, cartItems) => {
         image: row.image,
         price: parseFloat(row.price),
         category_id: row.category_id,
+        brand: row.brand,
         suggestion_type: "suggestion",
         campaign_id: null,
         discount_type: null,
@@ -183,6 +282,18 @@ const getSuggestions = async (supplierId, cartItems) => {
         discounted_price: null,
       });
     }
+  }
+
+  // ─── Anotações comerciais (badges/motivos exibidos no frontend) ────
+  for (const s of suggestions) {
+    const rule = bonusByProduct.get(s.product_id);
+    s.has_bonus = !!rule;
+    if (rule) {
+      s.bonus_rule_name = rule.name;
+      s.bonus_min_quantity = rule.minimum_quantity;
+      s.bonus_quantity = rule.bonus_quantity;
+    }
+    s.is_best_seller = bestSellerIds.has(s.product_id);
   }
 
   return suggestions.slice(0, 10);
