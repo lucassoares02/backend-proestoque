@@ -138,6 +138,7 @@ router.get("/orders-item", orders_item.findAll);
 router.get("/orders-item/:id", orders_item.find);
 router.get("/count/orders-items/:company", orders_item.countOrdersItems);
 router.post("/orders-item", orders_item.create);
+router.post("/orders-item/import-cart", orders_item.importCart);
 router.patch("/orders-item/:id", orders_item.update);
 router.delete("/orders-item/:id", orders_item.remove);
 

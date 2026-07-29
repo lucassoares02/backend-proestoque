@@ -25,8 +25,31 @@ const findId = async (id, company) => {
 // };
 
 const findProvidersCity = async (company) => {
+  // Oculta fornecedores sem produtos: só retorna empresas que possuem ao menos
+  // um produto ativo e não excluído.
+  //
+  // Ordena dando prioridade para quem está aberto e tem identidade configurada:
+  //   1) abertos primeiro (fechados vão para o fim da lista)
+  //   2) com banner configurado
+  //   3) com logo/foto configurada
+  //   4) ordem alfabética como desempate
   const result = await pool.query(
-    "SELECT c.*, MAX(o.id) AS order_id FROM companies c JOIN routes r ON r.company_id = c.id JOIN route_cities rc ON rc.route_id = r.id JOIN companies c2 ON c2.codigo_municipio_ibge = rc.city_id LEFT JOIN orders o ON o.supplier_id = c.id AND o.company_id = c2.id AND o.status = 'DRAFT' WHERE c2.id = $1 GROUP BY c.id;",
+    `SELECT c.*, MAX(o.id) AS order_id
+       FROM companies c
+       JOIN routes r ON r.company_id = c.id
+       JOIN route_cities rc ON rc.route_id = r.id
+       JOIN companies c2 ON c2.codigo_municipio_ibge = rc.city_id
+       LEFT JOIN orders o ON o.supplier_id = c.id AND o.company_id = c2.id AND o.status = 'DRAFT'
+      WHERE c2.id = $1
+        AND EXISTS (
+          SELECT 1 FROM products p
+           WHERE p.company_id = c.id AND p.active = true AND p.deleted_at IS NULL
+        )
+      GROUP BY c.id
+      ORDER BY COALESCE(c.is_open, true) DESC,
+               (c.banner IS NOT NULL AND c.banner <> '') DESC,
+               (c.logo IS NOT NULL AND c.logo <> '') DESC,
+               COALESCE(NULLIF(c.nome_fantasia, ''), c.razao_social) ASC;`,
     [company],
   );
   return result.rows || null;
@@ -48,7 +71,15 @@ const update = async (company) => {
   }
   if (company.color !== undefined) {
     fields.push(`color = $${idx++}`);
-    values.push(company.color.replace("#", "") || null);
+    values.push(company.color ? company.color.replace("#", "") : null);
+  }
+  if (company.banner !== undefined) {
+    fields.push(`banner = $${idx++}`);
+    values.push(company.banner || null);
+  }
+  if (company.is_open !== undefined) {
+    fields.push(`is_open = $${idx++}`);
+    values.push(company.is_open === true || company.is_open === "true");
   }
 
   if (fields.length === 0) throw new Error("Nenhum campo para atualizar");

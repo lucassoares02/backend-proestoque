@@ -383,6 +383,149 @@ const create = async (data) => {
   }
 };
 
+/**
+ * Importa um carrinho inteiro a partir da planilha do cliente.
+ *
+ * SOBRESCREVE o pedido DRAFT do par (company + supplier): remove todos os itens
+ * atuais e insere os enviados. O preço unitário é SEMPRE recalculado a partir
+ * das faixas de volume vigentes (products_prices) — o valor recebido do cliente
+ * é ignorado, o que garante preço correto e imune a adulteração da planilha.
+ *
+ * Validação estrita (tudo-ou-nada): se QUALQUER item referenciar produto que não
+ * pertence ao fornecedor ou pacote/quantidade sem preço, a operação inteira é
+ * revertida e retorna `{ ok: false, failed_items }`. Assim, uma planilha alterada
+ * indevidamente nunca gera um carrinho parcial.
+ */
+const importCart = async ({ company_id, supplier_id, items }) => {
+  if (!company_id || !supplier_id) {
+    return { ok: false, message: "company_id e supplier_id são obrigatórios", failed_items: [] };
+  }
+
+  // Normaliza e mantém apenas itens com quantidade > 0.
+  const positive = (Array.isArray(items) ? items : [])
+    .map((it) => ({
+      product_id: Number(it.product_id),
+      package_id: it.package_id === null || it.package_id === undefined ? null : Number(it.package_id),
+      quantity: Math.trunc(Number(it.quantity)) || 0,
+    }))
+    .filter((it) => it.product_id && it.quantity > 0);
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock($1, $2)`, [company_id, supplier_id]);
+
+    // Pedido DRAFT existente do fornecedor (o carrinho a ser sobrescrito).
+    const draft = await client.query(
+      `SELECT id FROM orders
+        WHERE company_id = $1 AND supplier_id = $2 AND status = 'DRAFT'
+        ORDER BY created_at DESC LIMIT 1`,
+      [company_id, supplier_id],
+    );
+    let orderId = draft.rows[0]?.id ?? null;
+
+    // Upload com todas as quantidades zeradas → esvazia o carrinho.
+    if (positive.length === 0) {
+      if (orderId) {
+        await client.query(`DELETE FROM order_items WHERE order_id = $1`, [orderId]);
+        await client.query(`DELETE FROM orders WHERE id = $1 AND status = 'DRAFT'`, [orderId]);
+      }
+      await client.query("COMMIT");
+      return { ok: true, order_id: null, item_count: 0, total: 0, order_removed: true };
+    }
+
+    // Recalcula preço e valida cada item ANTES de tocar no carrinho.
+    const resolved = [];
+    const failed = [];
+    for (const it of positive) {
+      const prod = await client.query(
+        `SELECT id FROM products WHERE id = $1 AND company_id = $2 LIMIT 1`,
+        [it.product_id, supplier_id],
+      );
+      if (!prod.rows.length) {
+        failed.push({ ...it, reason: "produto não pertence ao fornecedor" });
+        continue;
+      }
+
+      const priceRes = await client.query(
+        `SELECT pp.unit_price
+           FROM products_prices pp
+           JOIN products_packages pk ON pk.id = pp.product_package_id
+          WHERE pp.product_id = $1
+            AND pk.package_id IS NOT DISTINCT FROM $2
+            AND pp.qty_min <= $3
+            AND (pp.qty_max IS NULL OR pp.qty_max >= $3)
+          ORDER BY pp.qty_min DESC
+          LIMIT 1`,
+        [it.product_id, it.package_id, it.quantity],
+      );
+      if (!priceRes.rows.length) {
+        failed.push({ ...it, reason: "sem preço para o pacote/quantidade informados" });
+        continue;
+      }
+
+      const unitPrice = Number(priceRes.rows[0].unit_price);
+      resolved.push({
+        product_id: it.product_id,
+        package_id: it.package_id,
+        quantity: it.quantity,
+        unit_price: unitPrice,
+        total_price: unitPrice * it.quantity,
+      });
+    }
+
+    // Estrito: qualquer item inválido aborta a importação inteira.
+    if (failed.length > 0) {
+      await client.query("ROLLBACK");
+      return { ok: false, message: "Planilha inválida ou desatualizada", failed_items: failed };
+    }
+
+    // Cria o pedido DRAFT se ainda não existir.
+    if (!orderId) {
+      const created = await client.query(
+        `INSERT INTO orders (company_id, supplier_id, status, total_value)
+         VALUES ($1, $2, 'DRAFT', 0) RETURNING id`,
+        [company_id, supplier_id],
+      );
+      orderId = created.rows[0].id;
+    }
+
+    // SOBRESCREVE: limpa o carrinho atual e insere os itens da planilha.
+    await client.query(`DELETE FROM order_items WHERE order_id = $1`, [orderId]);
+    for (const it of resolved) {
+      await client.query(
+        `INSERT INTO order_items
+           (order_id, product_id, package_id, quantity, unit_price, total_price)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [orderId, it.product_id, it.package_id, it.quantity, it.unit_price, it.total_price],
+      );
+    }
+
+    const totalRes = await client.query(
+      `UPDATE orders
+          SET total_value = (SELECT COALESCE(SUM(total_price), 0) FROM order_items WHERE order_id = $1),
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING total_value`,
+      [orderId],
+    );
+
+    await client.query("COMMIT");
+    return {
+      ok: true,
+      order_id: orderId,
+      item_count: resolved.length,
+      total: Number(totalRes.rows[0].total_value),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("ERRO IMPORT CART:", error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 const update = async (data) => {
   // espera um objeto com propriedades em camelCase + id
   const { id, orderId, productId, quantity, unitPrice, totalPrice, createdAt, updatedAt } = data;
@@ -398,4 +541,4 @@ const remove = async (id) => {
   return result.rows[0];
 };
 
-module.exports = { findAll, find, create, update, remove, countOrdersItems };
+module.exports = { findAll, find, create, update, remove, countOrdersItems, importCart };

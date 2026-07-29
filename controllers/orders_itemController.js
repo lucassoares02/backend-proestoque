@@ -103,4 +103,23 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { findAll, find, create, update, remove, countOrdersItems };
+/**
+ * Importa um carrinho inteiro a partir da planilha do cliente (sobrescreve).
+ * Body: { company_id, supplier_id, items: [{ product_id, package_id, quantity }] }
+ */
+const importCart = async (req, res) => {
+  const { company_id, supplier_id, items } = req.body || {};
+  if (!company_id || !supplier_id || !Array.isArray(items)) {
+    return res.status(400).json({ ok: false, message: "company_id, supplier_id e items são obrigatórios" });
+  }
+  try {
+    const result = await service.importCart({ company_id, supplier_id, items });
+    // Falha de validação retorna 200 com ok:false para o cliente ler os detalhes.
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error importing cart:", error);
+    return res.status(500).json({ ok: false, message: "Failed to import cart" });
+  }
+};
+
+module.exports = { findAll, find, create, update, remove, countOrdersItems, importCart };
