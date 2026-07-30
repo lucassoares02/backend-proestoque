@@ -24,6 +24,21 @@ const findId = async (id, company) => {
 //   return result.rows || null;
 // };
 
+// Cache das colunas existentes em `companies` para montar o ORDER BY de forma
+// resiliente. As colunas `banner` e `is_open` dependem de uma migration
+// (ver DB_CHANGES_NEEDED.md — 12/06/2026); enquanto ela não é aplicada, referenciá-las
+// no SQL faz o Postgres lançar "column does not exist" e a rota retorna 500.
+// Detectamos em runtime quais existem e só as usamos quando presentes.
+let companiesColumnsCache = null;
+const getCompaniesColumns = async () => {
+  if (companiesColumnsCache) return companiesColumnsCache;
+  const { rows } = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'companies'`,
+  );
+  companiesColumnsCache = new Set(rows.map((r) => r.column_name));
+  return companiesColumnsCache;
+};
+
 const findProvidersCity = async (company) => {
   // Oculta fornecedores sem produtos: só retorna empresas que possuem ao menos
   // um produto ativo e não excluído.
@@ -33,6 +48,14 @@ const findProvidersCity = async (company) => {
   //   2) com banner configurado
   //   3) com logo/foto configurada
   //   4) ordem alfabética como desempate
+  // Colunas ausentes (migration pendente) são simplesmente ignoradas na ordenação.
+  const cols = await getCompaniesColumns();
+  const orderBy = [];
+  if (cols.has("is_open")) orderBy.push("COALESCE(c.is_open, true) DESC");
+  if (cols.has("banner")) orderBy.push("(c.banner IS NOT NULL AND c.banner <> '') DESC");
+  if (cols.has("logo")) orderBy.push("(c.logo IS NOT NULL AND c.logo <> '') DESC");
+  orderBy.push("COALESCE(NULLIF(c.nome_fantasia, ''), c.razao_social) ASC");
+
   const result = await pool.query(
     `SELECT c.*, MAX(o.id) AS order_id
        FROM companies c
@@ -46,10 +69,7 @@ const findProvidersCity = async (company) => {
            WHERE p.company_id = c.id AND p.active = true AND p.deleted_at IS NULL
         )
       GROUP BY c.id
-      ORDER BY COALESCE(c.is_open, true) DESC,
-               (c.banner IS NOT NULL AND c.banner <> '') DESC,
-               (c.logo IS NOT NULL AND c.logo <> '') DESC,
-               COALESCE(NULLIF(c.nome_fantasia, ''), c.razao_social) ASC;`,
+      ORDER BY ${orderBy.join(", ")};`,
     [company],
   );
   return result.rows || null;
