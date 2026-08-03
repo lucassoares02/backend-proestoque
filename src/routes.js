@@ -38,6 +38,8 @@ const notifications = require("../controllers/notificationController");
 const companyUsers = require("../controllers/companyUsersController");
 const cartTracking      = require("../controllers/cartTrackingController");
 const exchangeRequests  = require("../controllers/exchangeRequestsController");
+const clients           = require("../controllers/clientsController");
+const purchaseSuggestions = require("../controllers/purchaseSuggestionsController");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -281,6 +283,18 @@ router.get("/cart-tracking/supplier/:supplierId/sessions", cartTracking.getSessi
 router.get("/cart-tracking/supplier/:supplierId/metrics",  cartTracking.getMetrics);
 router.get("/cart-tracking/supplier/:supplierId/order/:orderId/timeline", cartTracking.getTimeline);
 router.get("/cart-tracking/supplier/:supplierId/order/:orderId/summary",  cartTracking.getSessionSummary);
+
+// CLIENTES (visão do fornecedor — compradores + carrinhos abertos)
+router.get("/clients/supplier/:supplierId", clients.list);
+
+// SUGESTÃO DE COMPRA (fornecedor → clientes). Rotas específicas antes de :id.
+router.get   ("/clients/suggestions/company/:company",  purchaseSuggestions.findAll);
+router.get   ("/clients/suggestions/products/:company", purchaseSuggestions.getProducts);
+router.get   ("/clients/suggestions/clients/:company",  purchaseSuggestions.getClients);
+router.get   ("/clients/suggestions/:id",               purchaseSuggestions.find);
+router.post  ("/clients/suggestions",                   purchaseSuggestions.create);
+router.patch ("/clients/suggestions/:id",               purchaseSuggestions.update);
+router.delete("/clients/suggestions/:id",               purchaseSuggestions.remove);
 
 // EXCHANGE REQUESTS (Trocas / Devoluções)
 // comprador — listByBuyer antes de findByBuyer para evitar colisão com :uuid
