@@ -89,4 +89,32 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { findAll, find, getProducts, getClients, create, update, remove };
+const findForClient = async (req, res) => {
+  try {
+    const { supplier, client } = req.params;
+    if (!supplier || !client) {
+      return res.status(400).json({ success: false, message: "supplier e client obrigatórios" });
+    }
+    const data = await service.findForClient(parseInt(supplier), parseInt(client));
+    return res.json({ success: true, data });
+  } catch (e) {
+    console.error("[purchaseSuggestionsController] findForClient error:", e);
+    return res.status(500).json({ success: false, message: "Erro interno" });
+  }
+};
+
+const addToCart = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const companyId = req.body?.companyId ?? req.body?.company_id;
+    if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "ID inválido" });
+    if (!companyId) return res.status(400).json({ success: false, message: "companyId obrigatório" });
+    const data = await service.addToCart(parseInt(id), parseInt(companyId));
+    return res.json({ success: true, data });
+  } catch (e) {
+    console.error("[purchaseSuggestionsController] addToCart error:", e);
+    return res.status(400).json({ success: false, message: e.message || "Falha ao adicionar ao carrinho" });
+  }
+};
+
+module.exports = { findAll, find, getProducts, getClients, create, update, remove, findForClient, addToCart };

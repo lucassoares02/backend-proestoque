@@ -270,4 +270,205 @@ const remove = async (id) => {
   return result.rows[0] || null;
 };
 
-module.exports = { findAll, find, getProducts, getClients, create, update, remove };
+// ─── Lado do cliente ──────────────────────────────────────────────────────────
+
+/**
+ * Sugestões ATIVAS visíveis para um cliente ao navegar no catálogo de um
+ * fornecedor: `target_type = 'all'` (geral) ou direcionadas ao próprio cliente.
+ */
+const findForClient = async (supplierId, clientId) => {
+  const sup = await pool.query(
+    `SELECT nome_fantasia, razao_social, logo, color FROM companies WHERE id = $1`,
+    [supplierId],
+  );
+  const supplier = sup.rows[0] || {};
+  const supplierName = supplier.nome_fantasia || supplier.razao_social || "Fornecedor";
+
+  const heads = await pool.query(
+    `SELECT DISTINCT s.id, s.title, s.description, s.target_type, s.created_at, s.updated_at
+       FROM purchase_suggestions s
+       LEFT JOIN purchase_suggestion_clients cl ON cl.suggestion_id = s.id
+      WHERE s.company_id = $1
+        AND s.active = true
+        AND s.deleted_at IS NULL
+        AND (s.target_type = 'all' OR cl.company_id = $2)
+      ORDER BY s.updated_at DESC, s.id DESC`,
+    [supplierId, clientId],
+  );
+
+  const out = [];
+  for (const s of heads.rows) {
+    const items = await pool.query(
+      `SELECT
+         i.product_id,
+         i.suggested_quantity,
+         p.name  AS product_name,
+         p.sku   AS product_sku,
+         b.name  AS brand_name,
+         (SELECT pi.url FROM products_images pi WHERE pi.product_id = p.id ORDER BY pi.sort_order LIMIT 1) AS product_image
+       FROM purchase_suggestion_items i
+       LEFT JOIN products p ON p.id = i.product_id
+       LEFT JOIN brands   b ON b.id = p.brand_id
+       WHERE i.suggestion_id = $1
+       ORDER BY i.id ASC`,
+      [s.id],
+    );
+
+    out.push({
+      id: s.id,
+      title: s.title,
+      description: s.description,
+      targetType: s.target_type,
+      createdAt: s.created_at,
+      updatedAt: s.updated_at,
+      supplierId,
+      supplierName,
+      supplierLogo: supplier.logo || null,
+      supplierColor: supplier.color || null,
+      itemCount: items.rows.length,
+      items: items.rows.map((i) => ({
+        productId: i.product_id,
+        suggestedQuantity: i.suggested_quantity,
+        productName: i.product_name,
+        productSku: i.product_sku,
+        brandName: i.brand_name,
+        productImage: i.product_image,
+      })),
+    });
+  }
+  return out;
+};
+
+/**
+ * Adiciona (incrementa — NÃO sobrescreve) os itens de uma sugestão ao carrinho
+ * DRAFT do cliente com aquele fornecedor. Reusa a mesma lógica de preço/pacote
+ * do restante do carrinho.
+ */
+const addToCart = async (suggestionId, buyerCompanyId) => {
+  if (!buyerCompanyId) throw new Error("Cliente inválido");
+
+  const sres = await pool.query(
+    `SELECT id, company_id FROM purchase_suggestions
+      WHERE id = $1 AND active = true AND deleted_at IS NULL`,
+    [suggestionId],
+  );
+  if (!sres.rows.length) throw new Error("Sugestão indisponível");
+  const supplierId = sres.rows[0].company_id;
+
+  const itemsRes = await pool.query(
+    `SELECT product_id, suggested_quantity
+       FROM purchase_suggestion_items WHERE suggestion_id = $1`,
+    [suggestionId],
+  );
+  if (itemsRes.rows.length === 0) throw new Error("Sugestão sem produtos");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock($1, $2)`, [buyerCompanyId, supplierId]);
+
+    // Encontra ou cria o pedido DRAFT (carrinho) do cliente com o fornecedor.
+    let orderId =
+      (await client.query(
+        `SELECT id FROM orders
+          WHERE company_id = $1 AND supplier_id = $2 AND status = 'DRAFT'
+          ORDER BY created_at DESC LIMIT 1`,
+        [buyerCompanyId, supplierId],
+      )).rows[0]?.id ?? null;
+
+    if (!orderId) {
+      orderId = (await client.query(
+        `INSERT INTO orders (company_id, supplier_id, status, total_value)
+         VALUES ($1, $2, 'DRAFT', 0) RETURNING id`,
+        [buyerCompanyId, supplierId],
+      )).rows[0].id;
+    }
+
+    let added = 0;
+    const skipped = [];
+
+    for (const it of itemsRes.rows) {
+      const qty = Math.max(1, parseInt(it.suggested_quantity) || 1);
+
+      // Resolve pacote-padrão + preço para a quantidade sugerida.
+      const price = await client.query(
+        `SELECT pk.package_id, pp.unit_price
+           FROM products_packages pk
+           JOIN products_prices pp ON pp.product_package_id = pk.id
+          WHERE pk.product_id = $1
+            AND pp.qty_min <= $2
+            AND (pp.qty_max IS NULL OR pp.qty_max >= $2)
+          ORDER BY pk.quantity ASC NULLS LAST, pp.qty_min DESC
+          LIMIT 1`,
+        [it.product_id, qty],
+      );
+      if (!price.rows.length) {
+        skipped.push(it.product_id);
+        continue;
+      }
+      const packageId = price.rows[0].package_id;
+      const unitPrice = Number(price.rows[0].unit_price);
+
+      // Incrementa se já existir a mesma chave (produto + pacote, não-bônus).
+      const existing = await client.query(
+        `SELECT id, quantity FROM order_items
+          WHERE order_id = $1 AND product_id = $2
+            AND package_id IS NOT DISTINCT FROM $3
+            AND variant_id IS NULL
+            AND COALESCE(is_bonus, false) = false
+          LIMIT 1`,
+        [orderId, it.product_id, packageId],
+      );
+
+      if (existing.rows.length) {
+        const newQty = Number(existing.rows[0].quantity) + qty;
+        await client.query(
+          `UPDATE order_items SET quantity = $1, unit_price = $2, total_price = $3 WHERE id = $4`,
+          [newQty, unitPrice, unitPrice * newQty, existing.rows[0].id],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO order_items (order_id, product_id, package_id, quantity, unit_price, total_price)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [orderId, it.product_id, packageId, qty, unitPrice, unitPrice * qty],
+        );
+      }
+      added++;
+    }
+
+    const totalRes = await client.query(
+      `UPDATE orders
+          SET total_value = (SELECT COALESCE(SUM(total_price), 0) FROM order_items WHERE order_id = $1),
+              updated_at = NOW()
+        WHERE id = $1
+        RETURNING total_value`,
+      [orderId],
+    );
+
+    await client.query("COMMIT");
+    return {
+      ok: true,
+      orderId,
+      added,
+      skipped,
+      total: Number(totalRes.rows[0].total_value),
+    };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+};
+
+module.exports = {
+  findAll,
+  find,
+  getProducts,
+  getClients,
+  create,
+  update,
+  remove,
+  findForClient,
+  addToCart,
+};

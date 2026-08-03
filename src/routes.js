@@ -288,13 +288,15 @@ router.get("/cart-tracking/supplier/:supplierId/order/:orderId/summary",  cartTr
 router.get("/clients/supplier/:supplierId", clients.list);
 
 // SUGESTÃO DE COMPRA (fornecedor → clientes). Rotas específicas antes de :id.
-router.get   ("/clients/suggestions/company/:company",  purchaseSuggestions.findAll);
-router.get   ("/clients/suggestions/products/:company", purchaseSuggestions.getProducts);
-router.get   ("/clients/suggestions/clients/:company",  purchaseSuggestions.getClients);
-router.get   ("/clients/suggestions/:id",               purchaseSuggestions.find);
-router.post  ("/clients/suggestions",                   purchaseSuggestions.create);
-router.patch ("/clients/suggestions/:id",               purchaseSuggestions.update);
-router.delete("/clients/suggestions/:id",               purchaseSuggestions.remove);
+router.get   ("/clients/suggestions/company/:company",         purchaseSuggestions.findAll);
+router.get   ("/clients/suggestions/products/:company",        purchaseSuggestions.getProducts);
+router.get   ("/clients/suggestions/clients/:company",         purchaseSuggestions.getClients);
+router.get   ("/clients/suggestions/for-client/:supplier/:client", purchaseSuggestions.findForClient);
+router.post  ("/clients/suggestions/:id/add-to-cart",          purchaseSuggestions.addToCart);
+router.get   ("/clients/suggestions/:id",                      purchaseSuggestions.find);
+router.post  ("/clients/suggestions",                          purchaseSuggestions.create);
+router.patch ("/clients/suggestions/:id",                      purchaseSuggestions.update);
+router.delete("/clients/suggestions/:id",                      purchaseSuggestions.remove);
 
 // EXCHANGE REQUESTS (Trocas / Devoluções)
 // comprador — listByBuyer antes de findByBuyer para evitar colisão com :uuid
