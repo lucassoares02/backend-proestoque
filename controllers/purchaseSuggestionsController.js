@@ -107,9 +107,10 @@ const addToCart = async (req, res) => {
   try {
     const { id } = req.params;
     const companyId = req.body?.companyId ?? req.body?.company_id;
+    const productIds = Array.isArray(req.body?.productIds) ? req.body.productIds : null;
     if (!id || isNaN(id)) return res.status(400).json({ success: false, message: "ID inválido" });
     if (!companyId) return res.status(400).json({ success: false, message: "companyId obrigatório" });
-    const data = await service.addToCart(parseInt(id), parseInt(companyId));
+    const data = await service.addToCart(parseInt(id), parseInt(companyId), productIds);
     return res.json({ success: true, data });
   } catch (e) {
     console.error("[purchaseSuggestionsController] addToCart error:", e);

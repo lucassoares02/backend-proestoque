@@ -305,7 +305,15 @@ const findForClient = async (supplierId, clientId) => {
          p.name  AS product_name,
          p.sku   AS product_sku,
          b.name  AS brand_name,
-         (SELECT pi.url FROM products_images pi WHERE pi.product_id = p.id ORDER BY pi.sort_order LIMIT 1) AS product_image
+         (SELECT pi.url FROM products_images pi WHERE pi.product_id = p.id ORDER BY pi.sort_order LIMIT 1) AS product_image,
+         (SELECT pp.unit_price
+            FROM products_packages pk
+            JOIN products_prices pp ON pp.product_package_id = pk.id
+           WHERE pk.product_id = i.product_id
+             AND pp.qty_min <= i.suggested_quantity
+             AND (pp.qty_max IS NULL OR pp.qty_max >= i.suggested_quantity)
+           ORDER BY pk.quantity ASC NULLS LAST, pp.qty_min DESC
+           LIMIT 1) AS unit_price
        FROM purchase_suggestion_items i
        LEFT JOIN products p ON p.id = i.product_id
        LEFT JOIN brands   b ON b.id = p.brand_id
@@ -333,6 +341,7 @@ const findForClient = async (supplierId, clientId) => {
         productSku: i.product_sku,
         brandName: i.brand_name,
         productImage: i.product_image,
+        unitPrice: i.unit_price != null ? Number(i.unit_price) : null,
       })),
     });
   }
@@ -344,7 +353,7 @@ const findForClient = async (supplierId, clientId) => {
  * DRAFT do cliente com aquele fornecedor. Reusa a mesma lógica de preço/pacote
  * do restante do carrinho.
  */
-const addToCart = async (suggestionId, buyerCompanyId) => {
+const addToCart = async (suggestionId, buyerCompanyId, productIds = null) => {
   if (!buyerCompanyId) throw new Error("Cliente inválido");
 
   const sres = await pool.query(
@@ -361,6 +370,14 @@ const addToCart = async (suggestionId, buyerCompanyId) => {
     [suggestionId],
   );
   if (itemsRes.rows.length === 0) throw new Error("Sugestão sem produtos");
+
+  // Filtra pelos produtos selecionados pelo cliente (se informados).
+  let rows = itemsRes.rows;
+  if (Array.isArray(productIds) && productIds.length > 0) {
+    const wanted = new Set(productIds.map(Number).filter(Boolean));
+    rows = rows.filter((r) => wanted.has(Number(r.product_id)));
+  }
+  if (rows.length === 0) throw new Error("Nenhum item selecionado");
 
   const client = await pool.connect();
   try {
@@ -387,7 +404,7 @@ const addToCart = async (suggestionId, buyerCompanyId) => {
     let added = 0;
     const skipped = [];
 
-    for (const it of itemsRes.rows) {
+    for (const it of rows) {
       const qty = Math.max(1, parseInt(it.suggested_quantity) || 1);
 
       // Resolve pacote-padrão + preço para a quantidade sugerida.
