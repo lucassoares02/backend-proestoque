@@ -16,13 +16,14 @@ const findGeneral = async (supplierId) => {
 };
 
 const upsertGeneral = async (supplierId, data) => {
-  const { allowed_methods, boleto_terms, first_order_required_method, first_order_max_amount, minimum_order_amount } = data;
+  const { allowed_methods, boleto_terms, first_order_required_method, first_order_max_amount, minimum_order_amount, maximum_order_amount } = data;
 
   const methods = _normMethods(allowed_methods) ?? ["PIX"];
   const terms = Array.isArray(boleto_terms) ? boleto_terms.map(Number).filter(Boolean) : [7, 14, 28];
   const firstMethod = VALID_METHODS.includes(first_order_required_method) ? first_order_required_method : null;
   const firstMax = first_order_max_amount != null ? Number(first_order_max_amount) : null;
   const minOrder = minimum_order_amount != null ? Number(minimum_order_amount) : null;
+  const maxOrder = maximum_order_amount != null ? Number(maximum_order_amount) : null;
 
   if (minOrder != null && firstMax != null && minOrder > firstMax) {
     const err = new Error("O pedido mínimo não pode ser maior que o valor máximo do primeiro pedido.");
@@ -30,21 +31,28 @@ const upsertGeneral = async (supplierId, data) => {
     throw err;
   }
 
+  if (minOrder != null && maxOrder != null && maxOrder < minOrder) {
+    const err = new Error("O pedido máximo não pode ser menor que o pedido mínimo.");
+    err.status = 422;
+    throw err;
+  }
+
   const result = await pool.query(
     `
     INSERT INTO payment_settings
-      (supplier_id, allowed_methods, boleto_terms, first_order_required_method, first_order_max_amount, minimum_order_amount, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      (supplier_id, allowed_methods, boleto_terms, first_order_required_method, first_order_max_amount, minimum_order_amount, maximum_order_amount, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
     ON CONFLICT (supplier_id) DO UPDATE SET
       allowed_methods             = EXCLUDED.allowed_methods,
       boleto_terms                = EXCLUDED.boleto_terms,
       first_order_required_method = EXCLUDED.first_order_required_method,
       first_order_max_amount      = EXCLUDED.first_order_max_amount,
       minimum_order_amount        = EXCLUDED.minimum_order_amount,
+      maximum_order_amount        = EXCLUDED.maximum_order_amount,
       updated_at                  = NOW()
     RETURNING *
     `,
-    [supplierId, methods, terms, firstMethod, firstMax, minOrder],
+    [supplierId, methods, terms, firstMethod, firstMax, minOrder, maxOrder],
   );
   return result.rows[0];
 };
@@ -136,6 +144,7 @@ const resolveForCheckout = async (supplierId, customerId) => {
     first_order_required_method: base.first_order_required_method,
     first_order_max_amount: customer?.first_order_limit ?? base.first_order_max_amount,
     minimum_order_amount: base.minimum_order_amount ?? null,
+    maximum_order_amount: base.maximum_order_amount ?? null,
     credit_limit: customer?.credit_limit ?? null,
     is_known_customer: customer?.is_known_customer ?? false,
   };

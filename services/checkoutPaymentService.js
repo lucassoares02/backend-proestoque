@@ -58,6 +58,15 @@ const getPaymentOptions = async (supplierId, companyId, orderTotal) => {
     }
   }
 
+  if (resolved.maximum_order_amount != null && orderTotal != null) {
+    if (Number(orderTotal) > Number(resolved.maximum_order_amount)) {
+      validationMessages.push({
+        type: "maximum_order_amount",
+        message: `Este fornecedor aceita pedidos de até R$ ${Number(resolved.maximum_order_amount).toFixed(2).replace(".", ",")}`,
+      });
+    }
+  }
+
   return {
     allowed_payment_methods: resolved.allowed_methods,
     boleto_terms: resolved.boleto_terms,
@@ -67,6 +76,7 @@ const getPaymentOptions = async (supplierId, companyId, orderTotal) => {
     first_order_required_payment_method: isFirstOrder ? resolved.first_order_required_method : null,
     first_order_max_amount: isFirstOrder ? resolved.first_order_max_amount : null,
     minimum_order_amount: resolved.minimum_order_amount ?? null,
+    maximum_order_amount: resolved.maximum_order_amount ?? null,
     validation_messages: validationMessages,
   };
 };
@@ -99,6 +109,10 @@ const validatePaymentChoice = async (supplierId, companyId, paymentMethod, bolet
 
   if (options.minimum_order_amount != null && Number(orderTotal) < Number(options.minimum_order_amount)) {
     return { valid: false, error: `Este fornecedor aceita pedidos a partir de R$ ${Number(options.minimum_order_amount).toFixed(2).replace(".", ",")}.` };
+  }
+
+  if (options.maximum_order_amount != null && Number(orderTotal) > Number(options.maximum_order_amount)) {
+    return { valid: false, error: `Este fornecedor aceita pedidos de até R$ ${Number(options.maximum_order_amount).toFixed(2).replace(".", ",")}.` };
   }
 
   if (paymentMethod === "CREDITO_COMERCIAL" && options.credit_limit != null) {

@@ -20,8 +20,9 @@ SELECT
   s.logo AS supplier_logo,
   s.color AS supplier_color,
 
-  -- 🔹 pedido mínimo do fornecedor
+  -- 🔹 pedido mínimo / máximo do fornecedor
   ps.minimum_order_amount,
+  ps.maximum_order_amount,
 
   COALESCE(
     json_agg(
@@ -119,7 +120,8 @@ GROUP BY
   s.nome_fantasia,
   s.logo,
   s.color,
-  ps.minimum_order_amount
+  ps.minimum_order_amount,
+  ps.maximum_order_amount
 HAVING COUNT(oi.id) > 0
 ORDER BY o.id DESC;
 
@@ -187,8 +189,9 @@ const find = async (uuid) => {
       s.logo          AS supplier_logo,
       s.color         AS supplier_color,
 
-      -- pedido mínimo do fornecedor
+      -- pedido mínimo / máximo do fornecedor
       ps.minimum_order_amount,
+      ps.maximum_order_amount,
 
       -- criador / aprovador (Part 5)
       u_creator.name  AS created_by_user_name,
@@ -299,6 +302,7 @@ const find = async (uuid) => {
       s.logo,
       s.color,
       ps.minimum_order_amount,
+      ps.maximum_order_amount,
       u_creator.name,
       u_approver.name
 
