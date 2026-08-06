@@ -527,11 +527,14 @@ const importCart = async ({ company_id, supplier_id, items }) => {
 };
 
 const update = async (data) => {
-  // espera um objeto com propriedades em camelCase + id
-  const { id, orderId, productId, quantity, unitPrice, totalPrice, createdAt, updatedAt } = data;
+  // Payload em snake_case (mesmo do create e do que o app/portal enviam).
+  // Antes desestruturava em camelCase → order_id/unit_price/total_price vinham
+  // undefined e a query zerava/falhava, e a quantidade não era salva.
+  // Atualiza só o que muda numa edição de carrinho (quantidade/preços).
+  const { id, quantity, unit_price, total_price } = data;
   const result = await pool.query(
-    "UPDATE order_items SET id = $1, order_id = $2, product_id = $3, quantity = $4, unit_price = $5, total_price = $6, created_at = $7, updated_at = $8 WHERE id = $9 RETURNING *",
-    [id, orderId, productId, quantity, unitPrice, totalPrice, createdAt, updatedAt, id],
+    "UPDATE order_items SET quantity = $1, unit_price = $2, total_price = $3, updated_at = NOW() WHERE id = $4 RETURNING *",
+    [quantity, unit_price, total_price, id],
   );
   return result.rows[0];
 };
